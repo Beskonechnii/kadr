@@ -1,0 +1,23 @@
+1
+00:00:00,000 --> 00:00:04,270
+Hey! Today we're talking
+about how to subtitle a video.
+
+2
+00:00:04,320 --> 00:00:08,350
+First, we transcribe the Russian
+speech locally on a Mac GPU.
+
+3
+00:00:08,400 --> 00:00:11,380
+Then we translate the text
+into English using Claude.
+
+4
+00:00:11,420 --> 00:00:14,630
+Finally, we export a file
+with two subtitle tracks.
+
+5
+00:00:14,680 --> 00:00:19,150
+The Fog, eat these soft French buns.

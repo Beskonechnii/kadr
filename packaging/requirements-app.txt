@@ -1,0 +1,26 @@
+# зависимости .app; mlx-whisper ставится отдельно с --no-deps — иначе тянет torch (~1 GB) ради конвертации моделей
+anthropic==1.15.0
+hf-xet==1.7.0
+huggingface_hub==2.2.0
+keyring==25.7.0
+mlx==0.32.4
+mlx-metal==0.32.4
+more-itertools==11.2.1
+numba==0.68.0
+numpy==2.5.4
+pyobjc-framework-Cocoa==12.2.2
+pyobjc-framework-ServiceManagement==12.2.2
+pyobjc-framework-UserNotifications==12.2.2
+scipy==1.18.1
+tiktoken==0.14.0
+tqdm==4.70.1
+watchdog==6.0.0
+# локальный перевод
+mlx-lm==0.32.2
+transformers==5.20.1
+tokenizers==0.23.3
+safetensors==0.8.0
+sentencepiece==0.2.2
+protobuf==7.36.2
+jinja2==3.1.6
+pyyaml==6.0.3

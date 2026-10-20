@@ -1,0 +1,15 @@
+.DS_Store
+__pycache__/
+.venv/
+.env
+# рабочие папки и модели dev-версии
+dev/
+# сборка: venv, ffmpeg, python — пересобирается build_app.sh
+packaging/build/
+# готовые артефакты — в GitHub Releases, не в истории
+/Субтитры.app/
+/Субтитры.zip
+/Как установить.txt
+# тестовые видео тяжёлые; srt оставляем
+test/*.mp4
+test/*.mkv

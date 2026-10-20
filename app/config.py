@@ -1,0 +1,110 @@
+import json
+import os
+import shutil
+import subprocess
+import sys
+from functools import lru_cache
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+APP_NAME = "Субтитры"
+# собрано PyInstaller-ом в .app: настройки — settings.json + Keychain, а не .env
+FROZEN = getattr(sys, "frozen", False)
+
+if FROZEN:
+    DATA = Path.home() / "Library/Application Support" / APP_NAME
+    HOME = Path.home() / "Movies" / APP_NAME
+    INBOX, DONE, FAILED = (HOME / d for d in ("Входящие", "Готово", "Ошибки"))
+    LOGS = Path.home() / "Library/Logs" / APP_NAME
+    try:
+        import keyring.backends.macOS
+
+        os.environ.setdefault("ANTHROPIC_API_KEY",
+                              keyring.backends.macOS.Keyring().get_password(APP_NAME, "anthropic") or "")
+    except Exception:
+        pass
+else:
+    from dotenv import load_dotenv
+
+    load_dotenv(ROOT / ".env")
+    # рабочие папки dev-версии — в dev/, чтобы в корне лежали только приложение и гайд
+    DATA = HOME = ROOT / "dev"
+    INBOX, DONE, FAILED, LOGS = (DATA / d for d in ("inbox", "done", "failed", "logs"))
+
+WORK_TMP = DATA / ".work"
+SETTINGS = DATA / "settings.json"   # то, что меняется из меню приложения; .env (dev) важнее
+try:
+    for k, v in json.loads(SETTINGS.read_text()).items():
+        os.environ.setdefault(k, str(v))
+except (OSError, ValueError):
+    pass
+GLOBAL_CONTEXT = HOME / "context.txt"
+
+# кэш моделей HF; ставим до импорта huggingface_hub
+os.environ.setdefault("HF_HOME", str(DATA / "models"))
+MODELS_DIR = os.environ["HF_HOME"]
+
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
+# ключ без привязки к workspace требует явный id (заголовок anthropic-workspace-id)
+ANTHROPIC_WORKSPACE_ID = os.getenv("ANTHROPIC_WORKSPACE_ID", "").strip()
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5")
+# local — LLM на этом Mac через MLX (бесплатно); claude — Claude API (лучше, нужен ключ и баланс)
+TRANSLATOR = os.getenv("TRANSLATOR", "local")
+TRANSLATE_PARALLEL = int(os.getenv("TRANSLATE_PARALLEL", "3"))
+
+SOURCE_LANG = os.getenv("SOURCE_LANG", "ru")
+WHISPER_BACKEND = os.getenv("WHISPER_BACKEND", "mlx")          # mlx | faster
+RAM_GB = int(subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True,
+                            text=True).stdout or 0) // 2**30
+# large-v3 в fp16 занимает ~3 GB GPU-памяти; на 8 GB машине берём turbo
+WHISPER_MODEL = os.getenv("WHISPER_MODEL") or (
+    ("mlx-community/whisper-large-v3-mlx" if RAM_GB >= 16 else "mlx-community/whisper-large-v3-turbo")
+    if WHISPER_BACKEND == "mlx" else "large-v3-turbo")
+LOCAL_LLM = os.getenv("LOCAL_LLM") or (
+    "mlx-community/Qwen3.5-9B-MLX-4bit" if RAM_GB >= 16 else "mlx-community/gemma-4-e4b-it-4bit")
+# на 8 GB Whisper и переводчик вместе не помещаются — держим в памяти только одну модель
+LOW_MEMORY = RAM_GB < 16
+# только для faster-whisper (Intel)
+WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu")
+WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
+WHISPER_THREADS = int(os.getenv("WHISPER_THREADS", "0"))
+
+BURN = os.getenv("BURN", "1").strip() == "1"   # .en.mp4 с субтитрами в кадре — главный результат
+BURN_STYLE = os.getenv(
+    "BURN_STYLE",
+    "FontName=Helvetica,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
+    "BorderStyle=1,Outline=1.5,Shadow=0,MarginV=28",
+)
+BURN_STYLE_VERTICAL = os.getenv("BURN_STYLE_VERTICAL", "FontSize=11,MarginV=70")
+BURN_CRF = os.getenv("BURN_CRF", "20")
+BURN_PRESET = os.getenv("BURN_PRESET", "veryfast")
+
+
+def _runs(exe: str) -> bool:
+    try:
+        return subprocess.run([exe, "-version"], capture_output=True, timeout=20).returncode == 0
+    except OSError:
+        return False
+
+
+@lru_cache
+def ffmpeg_dir() -> Path:
+    """ffmpeg-full (с libass) предпочтительнее; launchd/Finder не видят PATH Homebrew,
+    поэтому ищем по абсолютным путям."""
+    bundled = Path(getattr(sys, "_MEIPASS", ROOT)) / "bin"
+    for d in (os.getenv("FFMPEG_DIR"), bundled, "/opt/homebrew/opt/ffmpeg-full/bin", "/opt/homebrew/bin",
+              "/usr/local/opt/ffmpeg-full/bin", "/usr/local/bin"):
+        if d and _runs(f"{d}/ffmpeg"):
+            return Path(d)
+    found = shutil.which("ffmpeg")
+    if not found:
+        raise RuntimeError("ffmpeg не найден: brew install ffmpeg")
+    return Path(found).parent
+
+
+def ffmpeg() -> str:
+    return str(ffmpeg_dir() / "ffmpeg")
+
+
+def ffprobe() -> str:
+    return str(ffmpeg_dir() / "ffprobe")

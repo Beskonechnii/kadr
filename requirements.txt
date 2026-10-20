@@ -1,0 +1,6 @@
+mlx-whisper>=0.4; platform_machine == "arm64"
+mlx-lm>=0.32; platform_machine == "arm64"
+faster-whisper>=1.1; platform_machine != "arm64"
+anthropic>=0.40
+watchdog>=4
+python-dotenv>=1
