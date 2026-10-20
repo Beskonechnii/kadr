@@ -18,7 +18,7 @@ from AppKit import (NSAlert, NSApplication, NSBezierPath, NSBox, NSButton, NSCol
 from Foundation import NSURL, NSAttributedString, NSInsetRect, NSObject, NSTimer
 from PyObjCTools import AppHelper
 
-from . import config, runner, watch
+from . import __version__, config, runner, watch
 from .transcribe import get_model
 
 log = logging.getLogger("subbot")
@@ -198,7 +198,7 @@ class AppDelegate(NSObject):
         W, H = 520, 420
         self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             NSMakeRect(0, 0, W, H), 1 | 2 | 4, 2, False)   # titled | closable | miniaturizable
-        self.window.setTitle_(config.APP_NAME)
+        self.window.setTitle_(f"{config.APP_NAME} {__version__}" + ("" if config.FROZEN else " — dev"))
         self.window.setReleasedWhenClosed_(False)
         self.window.center()
         v = self.window.contentView()

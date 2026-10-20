@@ -1,10 +1,12 @@
 """Quick Action «Сделать субтитры» в ~/Library/Services (Finder → Быстрые действия)."""
 import plistlib
 import subprocess
+import sys
 import uuid
 from pathlib import Path
 
-NAME = "Сделать субтитры"
+# dev-версия ставит своё действие рядом, а не поверх действия из .app
+NAME = "Сделать субтитры" + ("" if getattr(sys, "frozen", False) else " (dev)")
 
 
 def install(script: str) -> Path:
