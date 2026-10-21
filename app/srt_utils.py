@@ -18,6 +18,7 @@ class Word:
     start: float
     end: float
     text: str
+    prob: float = 1.0   # уверенность Whisper: редактор подсвечивает сомнительные слова
 
 
 @dataclass
@@ -77,7 +78,7 @@ def words_to_cues(words: list[Word]) -> list[Cue]:
         text = " ".join(w.text.strip() for w in buf).strip()
         if text:
             cues.append(Cue(len(cues) + 1, buf[0].start, buf[-1].end, text,
-                            [Word(w.start, w.end, w.text.strip()) for w in buf]))
+                            [Word(w.start, w.end, w.text.strip(), w.prob) for w in buf]))
         buf.clear()
 
     for w in words:
@@ -112,6 +113,16 @@ def _fix_timings(cues: list[Cue]) -> list[Cue]:
         c.end = max(c.end, min(c.end + 0.25, nxt - 0.05))
         if c.end <= c.start:
             c.end = c.start + 0.5
+    return cues
+
+
+def apply_fixes(cues: list[Cue], fixes: dict[str, str]) -> list[Cue]:
+    """Замены, запомненные в редакторе: одно и то же имя Whisper слышит одинаково неправильно.
+    Подстрокой и без регистра — как «Заменить все» в редакторе, чтобы ловить и падежи."""
+    for a, b in fixes.items():
+        rx = re.compile(re.escape(a), re.I)
+        for c in cues:
+            c.text = rx.sub(b, c.text)
     return cues
 
 

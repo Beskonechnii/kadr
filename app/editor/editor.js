@@ -49,9 +49,33 @@ function changed() {
   clearTimeout(saveT)
   status('Есть изменения…')
   saveT = setTimeout(save, 800)
+  clearTimeout(histT)
+  histT = setTimeout(remember, 400)   // набор текста и перетаскивание — одним шагом отмены
 }
 async function save() { clearTimeout(saveT); await call('save', { proj }); status('Сохранено') }
 const setStyle = (k, val) => { proj.style[k] = val; changed() }
+
+// ---------- отмена: снимки реплик и стиля ----------
+const snap = () => JSON.stringify({ cues: proj.cues, style: proj.style })
+let hist = [snap()], pos = 0, histT
+function remember() {
+  clearTimeout(histT)
+  const s = snap()
+  if (s === hist[pos]) return
+  hist.splice(pos + 1, Infinity, s)
+  if (hist.length > 300) hist.shift()
+  pos = hist.length - 1
+}
+function undo(d) {
+  remember()   // недописанная правка — тоже шаг
+  if (!hist[pos + d]) return status(d < 0 ? 'Отменять нечего' : 'Повторять нечего')
+  pos += d
+  Object.assign(proj, JSON.parse(hist[pos]))
+  caret = null
+  renderPresets()
+  syncPanel()
+  rerender(Math.min(Math.max(sel, 0), proj.cues.length - 1))
+}
 
 // ---------- видео ----------
 if (init.video) {
@@ -69,7 +93,7 @@ if (init.video) {
 const duration = () => v.duration || proj.duration || 1
 const togglePlay = () => v.paused ? v.play() : v.pause()
 v.addEventListener('play', () => { $('play').textContent = '❚❚' })
-v.addEventListener('pause', () => { $('play').textContent = '▶︎' })
+v.addEventListener('pause', () => { $('play').textContent = '▶︎'; stopAt = null })
 $('play').onclick = togglePlay
 
 function layout() {
@@ -206,36 +230,111 @@ function drawGrid() {
 // ---------- список реплик ----------
 const grow = ta => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px' }
 const cps = c => c.en.length / Math.max(0.1, c.end - c.start)
+const READ_CPS = 17   // столько знаков в секунду успевают прочитать; > 21 — уже не успевают
+// слова, в которых Whisper не уверен и которые ещё стоят в русском тексте: там чаще всего ошибки распознавания
+const clean = w => w.toLowerCase().replace(/[^\p{L}\d-]/gu, '')
+const doubts = c => (c.words || []).filter(w => (w[3] ?? 1) < 0.65 && clean(w[2]).length > 1
+  && (c.ru || '').toLowerCase().includes(clean(w[2])))
+const problems = c => cps(c) > 21 || !c.en.trim() || c.stale || doubts(c).length > 0
 function renderList() {
   const list = $('list')
   list.innerHTML = ''
   proj.cues.forEach((c, i) => {
     const el = document.createElement('div')
     el.className = 'cue'
-    el.innerHTML = `<div class="t"><span class="tm"></span><span class="warn"></span><span class="acts">
+    el.innerHTML = `<div class="t"><span class="tm"></span><span class="acts">
       <button data-a="split" title="Разрезать по курсору в тексте или по позиции видео (⌘B)">✂︎</button>
       <button data-a="merge" title="Склеить со следующей">⤓</button>
-      <button data-a="retr" title="Перевести заново по русскому тексту">↻</button></span></div>
-      <textarea class="en" rows="1" spellcheck="true"></textarea><textarea class="ru" rows="1" spellcheck="false"></textarea>`
-    const [en, ru] = el.querySelectorAll('textarea'), warn = el.querySelector('.warn')
+      <button data-a="retr" title="Перевести заново по русскому тексту">↻</button>
+      <button data-a="del" title="Удалить реплику (⌘⌫)">✕</button></span></div>
+      <div class="warn"></div>
+      <textarea class="en" rows="1" spellcheck="true"></textarea><textarea class="ru" rows="1" spellcheck="false"></textarea>
+      <div class="doubt"></div>`
+    const [en, ru] = el.querySelectorAll('textarea'), warn = el.querySelector('.warn'), doubt = el.querySelector('.doubt')
     el.querySelector('.tm').textContent = `${fmtT(c.start)} – ${fmtT(c.end)}`
     el.querySelector('[data-a=merge]').hidden = i === proj.cues.length - 1
-    el.querySelector('.acts').onclick = e => {
+    el.onclick = e => {
       const a = e.target.dataset.a
       if (a === 'split') split(i); else if (a === 'merge') merge(i); else if (a === 'retr') retranslate(i, e.target)
+      else if (a === 'del') remove(i)
+      else if (a === 'short') retranslate(i, e.target, Math.max(10, Math.round(READ_CPS * (c.end - c.start))))
+      else if (e.target === el || e.target.closest('.t')) select(i, true)
     }
     en.onkeyup = en.onclick = () => { caret = { i, pos: en.selectionStart } }
-    const check = () => { warn.textContent = cps(c) > 21 ? '⚡ быстро для чтения' : '' }
+    el.check = () => {
+      warn.innerHTML = (cps(c) > 21 ? '<button data-a="short" title="Перевести короче — под время реплики">⚡ быстро · сократить</button>' : '')
+        + (c.stale ? '<button data-a="retr" title="Русский правили после перевода">RU изменён · перевести</button>' : '')
+        + (c.en.trim() ? '' : '<button data-a="retr">нет перевода · перевести</button>')
+      doubt.innerHTML = ''
+      for (const w of doubts(c)) {
+        const b = Object.assign(document.createElement('button'), { textContent: '? ' + clean(w[2]), title: 'Whisper не уверен — послушать слово' })
+        b.onclick = e => { e.stopPropagation(); hear(ru, c, w) }
+        doubt.append(b)
+      }
+      el.classList.toggle('bad', problems(c))
+    }
     en.value = c.en
     ru.value = c.ru || ''
-    en.oninput = () => { c.en = en.value; grow(en); check(); label(i); changed() }
-    ru.oninput = () => { c.ru = ru.value; grow(ru); changed() }
+    en.oninput = () => { c.en = en.value; grow(en); el.check(); label(i); changed(); bar() }
+    ru.oninput = () => { c.ru = ru.value; c.stale = true; grow(ru); el.check(); changed(); bar() }
     for (const ta of [en, ru]) ta.onfocus = () => select(i, true)
-    el.onclick = e => { if (e.target === el || e.target.closest('.t')) select(i, true) }
     list.append(el)
-    check()
+    el.check()
   })
+  bar()
   requestAnimationFrame(() => list.querySelectorAll('textarea').forEach(grow))
+}
+// сомнительное слово: выделить в русском тексте и проиграть его
+let stopAt = null
+function hear(ru, c, w) {
+  const k = ru.value.toLowerCase().indexOf(clean(w[2]))
+  ru.focus()
+  ru.setSelectionRange(k, k + clean(w[2]).length)
+  if (!init.video) return
+  v.currentTime = Math.max(c.start, w[0] - 0.3)
+  // после play: pause от select() при фокусе придёт раньше и не сбросит остановку
+  v.play().then(() => { stopAt = w[1] + 0.3 })
+}
+
+// ---------- панель над списком: поиск и замена, проблемные, пакетный перевод ----------
+const esc = t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const findRx = (f = 'i') => $('find').value ? new RegExp(esc($('find').value), f) : null
+function bar() {
+  const rx = findRx(), only = $('onlybad').checked
+  const hit = c => !rx || rx.test(c.en) || rx.test(c.ru || '')
+  let found = 0
+  proj.cues.forEach((c, i) => {
+    const h = hit(c), el = $('list').children[i]
+    found += !!(rx && h)
+    if (el) el.hidden = !h || only && !problems(c)
+  })
+  const bad = proj.cues.filter(problems).length, stale = proj.cues.filter(c => c.stale).length
+  $('badn').textContent = bad ? `(${bad})` : ''
+  $('replrow').hidden = $('remrow').hidden = !rx
+  $('replall').textContent = `Заменить (${found})`
+  $('replall').disabled = !found
+  $('retrall').hidden = !stale
+  $('retrall').textContent = `↻ Перевести изменённые (${stale})`
+}
+$('find').oninput = $('onlybad').onchange = bar
+$('find').onkeydown = e => { if (e.key === 'Escape') { $('find').value = ''; bar(); $('find').blur() } }
+$('replall').onclick = async () => {
+  const rx = findRx('gi'), to = $('repl').value
+  let n = 0
+  for (const c of proj.cues) {
+    const en = c.en.replace(rx, to), ru = (c.ru || '').replace(rx, to)
+    n += en !== c.en || ru !== (c.ru || '')
+    Object.assign(c, { en, ru })
+  }
+  if ($('remember').checked && $('find').value.trim().length > 2) await call('remember_fix', { find: $('find').value.trim(), repl: to })
+  $('find').value = ''
+  rerender(Math.max(sel, 0))
+  status(`Заменено в ${n} репл.` + ($('remember').checked ? ' · запомнено для новых видео' : ''))
+}
+$('retrall').onclick = async () => {
+  $('retrall').disabled = true
+  for (let i = 0; i < proj.cues.length; i++) if (proj.cues[i].stale) await retranslate(i, $('retrall'))
+  $('retrall').disabled = false
 }
 
 // ---------- разрезать / склеить / перевести заново ----------
@@ -267,17 +366,44 @@ function merge(i) {
   proj.cues.splice(i, 2, { ...a, end: b.end, en: join(a.en, b.en), ru: join(a.ru, b.ru), words: [...(a.words || []), ...(b.words || [])] })
   rerender(i)
 }
+function remove(i) {
+  proj.cues.splice(i, 1)
+  rerender(Math.min(i, proj.cues.length - 1))
+}
+// новая реплика в паузе под курсором видео: Whisper пропустил фразу
+function insert() {
+  const t = v.currentTime, k = proj.cues.findIndex(c => c.end > t), next = proj.cues[k], prev = proj.cues[k < 0 ? proj.cues.length - 1 : k - 1]
+  if (next && next.start <= t) return status('Поставьте курсор видео в паузу между репликами')
+  const start = +Math.max(t, prev ? prev.end : 0).toFixed(2), end = +Math.min(start + 2, next ? next.start : duration()).toFixed(2)
+  if (end - start < 0.3) return status('Пауза слишком короткая для реплики')
+  const i = k < 0 ? proj.cues.length : k
+  proj.cues.splice(i, 0, { start, end, ru: '', en: '', words: [] })
+  rerender(i)
+  $('list').children[i].querySelector('.en').focus()
+}
+// край выбранной реплики — на позицию видео
+function setEdge(side) {
+  const i = active >= 0 ? active : sel, c = proj.cues[i]
+  if (!c) return
+  const t = side === 'start' ? Math.min(Math.max(v.currentTime, proj.cues[i - 1]?.end ?? 0), c.end - 0.2)
+                             : Math.max(Math.min(v.currentTime, proj.cues[i + 1]?.start ?? duration()), c.start + 0.2)
+  c[side] = +t.toFixed(2)
+  rerender(i)
+}
 function rerender(i) { renderList(); renderTrack(); active = -1; select(i, false); changed() }
-async function retranslate(i, btn) {
+async function retranslate(i, btn, limit = null) {
   btn.disabled = true
-  status('Перевожу реплику…')
+  status(limit ? 'Сокращаю перевод…' : `Перевожу реплику ${i + 1}…`)
   try {
-    const en = await call('retranslate', { i, proj })
-    proj.cues[i].en = en
-    const ta = $('list').children[i]?.querySelector('.en')
-    if (ta) { ta.value = en; grow(ta) }
+    const c = proj.cues[i]
+    c.en = await call('retranslate', { i, proj, limit })
+    delete c.stale
+    const el = $('list').children[i], ta = el?.querySelector('.en')
+    if (ta) { ta.value = c.en; grow(ta); el.check() }
     label(i)
     changed()
+    bar()
+    status(limit && cps(c) > 21 ? 'Короче не вышло — поправьте вручную или растяните реплику' : 'Переведено')
   } catch (e) { status('Не перевелось: ' + (e.message || e)) }
   btn.disabled = false
 }
@@ -337,7 +463,7 @@ $('track').addEventListener('pointermove', e => {
   v.currentTime = t
   changed()
 })
-$('track').addEventListener('pointerup', () => { edge = null })
+$('track').addEventListener('pointerup', () => { edge = null; remember() })
 // колёсико — масштаб вокруг курсора, тачпад вбок — прокрутка
 $('track').addEventListener('wheel', e => {
   if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return
@@ -364,6 +490,7 @@ function tick() {
     if (a >= 0 && !v.paused) $('list').children[a]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   }
   if (!drag && st().words && !v.paused) drawBox()
+  if (stopAt && t >= stopAt) { v.pause(); stopAt = null }
   requestAnimationFrame(tick)
 }
 
@@ -438,14 +565,28 @@ window.onRebuild = (state, text) => {
 }
 $('reveal').onclick = () => call('reveal')
 
+$('add').onclick = insert
+const inField = () => /TEXTAREA|INPUT|SELECT/.test(document.activeElement.tagName)
 addEventListener('keydown', e => {
   if (e.metaKey && e.key === 's') { e.preventDefault(); save() }
+  else if (e.metaKey && e.key === 'f') { e.preventDefault(); $('find').focus(); $('find').select() }
+  else if (e.metaKey && e.key.toLowerCase() === 'z' && document.activeElement.id !== 'pname') { e.preventDefault(); undo(e.shiftKey ? 1 : -1) }
+  else if (e.metaKey && e.key === 'Backspace' && !inField()) { e.preventDefault(); if (sel >= 0) remove(sel) }
+  else if (inField() || e.metaKey) return
+  else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    e.preventDefault()
+    const i = Math.min(proj.cues.length - 1, Math.max(0, (active >= 0 ? active : sel) + (e.key === 'ArrowUp' ? -1 : 1)))
+    select(i, true)
+    $('list').children[i]?.scrollIntoView({ block: 'nearest' })
+  }
+  else if (e.key === '[') setEdge('start')
+  else if (e.key === ']') setEdge('end')
   else if (e.metaKey && e.key === 'b') {
     e.preventDefault()
     const i = caret && document.activeElement.classList.contains('en') ? caret.i : active >= 0 ? active : sel
     if (i >= 0) split(i)
   }
-  else if (e.key === ' ' && !/TEXTAREA|INPUT|SELECT/.test(document.activeElement.tagName)) { e.preventDefault(); togglePlay() }
+  else if (e.key === ' ') { e.preventDefault(); togglePlay() }
 })
 
 renderList()

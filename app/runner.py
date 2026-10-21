@@ -14,7 +14,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from . import config, media, pipeline, project
-from .srt_utils import read_srt, write_srt
+from .srt_utils import apply_fixes, read_srt, write_srt
 from .translate import translate_cues
 
 log = logging.getLogger("kadr")
@@ -155,7 +155,7 @@ async def process(src: Path, out_dir: Path, user_context: str, hint: str | None,
             await progress(f"🌍 Перевожу на английский… ({len(cues)} реплик)")
             en = await translate_cues(cues, user_context,
                                       lambda p: progress(f"🌍 Перевожу… {int(p * 100)}%"))
-            write_srt(en, work / f"{name}.en.srt")
+            write_srt(apply_fixes(en, config.fixes()), work / f"{name}.en.srt")
             res = Result([], len(en), {"translate": round(time.monotonic() - t, 1)})
         else:
             r = await pipeline.run(work, src, user_context, progress, hint)

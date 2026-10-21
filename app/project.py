@@ -34,7 +34,7 @@ def build(ru: list[Cue], en: list[Cue], info: dict, speech: list | None = None) 
     # переводчики сохраняют тайминги реплик, но выкидывают пустые и перенумеровывают — связываем по началу
     en_by_start = {round(c.start, 3): c.text for c in en}
     cues = [{"start": c.start, "end": c.end, "ru": c.text, "en": en_by_start.get(round(c.start, 3), ""),
-             "words": [[round(x.start, 3), round(x.end, 3), x.text] for x in c.words]} for c in ru]
+             "words": [[round(x.start, 3), round(x.end, 3), x.text, round(x.prob, 2)] for x in c.words]} for c in ru]
     return {"version": 1, "width": w, "height": h, "format": fmt,
             "duration": float(info.get("format", {}).get("duration", 0)),
             "style": {"preset": style.defaults()[fmt]}, "cues": [c for c in cues if c["en"]], "files": {},

@@ -49,6 +49,14 @@ try:
 except (OSError, ValueError):
     pass
 GLOBAL_CONTEXT = HOME / "context.txt"
+FIXES = DATA / "fixes.json"   # замены «запомнить» из редактора: {"было": "стало"}
+
+
+def fixes() -> dict[str, str]:
+    try:
+        return json.loads(FIXES.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
 
 # кэш моделей HF; ставим до импорта huggingface_hub
 os.environ.setdefault("HF_HOME", str(DATA / "models"))
