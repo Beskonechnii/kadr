@@ -14,7 +14,7 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from . import config, runner
-from .transcribe import get_model
+from .transcribe import get_model, release
 
 log = logging.getLogger("kadr")
 
@@ -100,7 +100,8 @@ def handle(src: Path):
 def main():
     runner.setup_logging()
     runner.check_ready()
-    get_model()
+    if config.KEEP_MODELS is None:
+        get_model()
     try:
         serve()
     except KeyboardInterrupt:
@@ -119,7 +120,11 @@ def serve(ready=lambda: True):
     log.info("Слежу за %s — кидай туда видео (Ctrl+C — выход)", config.INBOX)
     try:
         while True:
-            src = jobs.get()
+            try:
+                src = jobs.get(timeout=config.KEEP_MODELS)
+            except queue.Empty:
+                release()   # простой: память — системе, следующее видео подождёт загрузку моделей
+                src = jobs.get()
             while not ready():
                 time.sleep(1)
             try:

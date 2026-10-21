@@ -12,8 +12,10 @@ log = logging.getLogger(__name__)
 
 
 async def _run(*args: str) -> str:
+    # QoS потока дочерний процесс не наследует — в «Экономе» зажимаем ffmpeg явно
+    clamp = ["/usr/sbin/taskpolicy", "-c", "utility"] if config.EFFORTS[config.EFFORT]["bg"] else []
     proc = await asyncio.create_subprocess_exec(
-        *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        *clamp, *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
     out, err = await proc.communicate()
     if proc.returncode != 0:

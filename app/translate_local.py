@@ -8,7 +8,7 @@ import threading
 
 from . import config
 from .srt_utils import Cue
-from .transcribe import _mlx_thread  # общий поток: модели MLX привязаны к потоку, где созданы
+from .transcribe import _mlx_thread, local_path  # общий поток: модели MLX привязаны к потоку, где созданы
 
 log = logging.getLogger(__name__)
 
@@ -30,32 +30,43 @@ Rules:
 _LINE = re.compile(r"^\s*(\d+)\s*[:.)]\s?(.*)$")
 
 _model = None
+_name = None
 _lock = threading.Lock()
 
 
 def unload():
-    """Освободить память под Whisper (LOW_MEMORY). Вызывать в потоке MLX."""
-    global _model
+    """Освободить память под Whisper (ONE_MODEL). Вызывать в потоке MLX."""
     with _lock:
-        if _model is not None:
-            import mlx.core as mx
+        _unload()
 
-            _model = None
-            mx.clear_cache()
+
+def _unload():
+    global _model
+    if _model is not None:
+        import mlx.core as mx
+
+        _model = None
+        mx.clear_cache()
 
 
 def _load():
-    global _model
+    global _model, _name
     with _lock:
+        if _name != config.LOCAL_LLM:   # нагрузку переключили — модель другая
+            _unload()
         if _model is None:
-            if config.LOW_MEMORY:
+            if config.ONE_MODEL:
                 from . import transcribe
 
                 transcribe.unload()
+            import mlx.core as mx
             from mlx_lm import load
 
             log.info("Загружаю переводчик %s…", config.LOCAL_LLM)
-            _model = load(config.LOCAL_LLM)
+            from mlx_lm.utils import DEFAULT_ALLOW_PATTERNS
+
+            _model, _name = load(local_path(config.LOCAL_LLM, DEFAULT_ALLOW_PATTERNS)), config.LOCAL_LLM
+            mx.set_cache_limit(config.MLX_CACHE)
             log.info("Переводчик загружен")
     return _model
 
@@ -85,6 +96,7 @@ def _parse(out: str, want: set[int]) -> dict[int, str]:
 
 
 def _translate_chunk(chunk: list[Cue], prev: list[Cue], context: str) -> dict[int, str]:
+    config.job_qos()
     head = []
     if context:
         head.append(f"About the video (names, terms):\n{context}")

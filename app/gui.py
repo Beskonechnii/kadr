@@ -1,25 +1,29 @@
 """Окно приложения: перетащить видео → прогресс → «Показать в Finder». Плюс «Входящие» в фоне."""
 from __future__ import annotations
 
+import ctypes
 import fcntl
 import json
 import logging
+import os
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 import objc
 from AppKit import (NSAlert, NSApplication, NSBezierPath, NSBox, NSButton, NSColor,
                     NSDragOperationCopy, NSFont, NSFontAttributeName,
-                    NSForegroundColorAttributeName, NSImage, NSImageSymbolConfiguration, NSMakeRect,
+                    NSForegroundColorAttributeName, NSImage, NSImageSymbolConfiguration, NSLevelIndicator,
+                    NSMakeRect,
                     NSMenu, NSMenuItem, NSOpenPanel, NSPasteboardTypeFileURL,
                     NSPasteboardURLReadingFileURLsOnlyKey, NSPopUpButton, NSProgressIndicator,
                     NSSecureTextField, NSTextField, NSView, NSWindow)
 from Foundation import NSURL, NSAttributedString, NSInsetRect, NSObject, NSTimer
 from PyObjCTools import AppHelper
 
-from . import __version__, config, runner, watch
-from .transcribe import get_model
+from . import __version__, config, runner, transcribe, translate_local, watch
+from .transcribe import get_model, release
 
 log = logging.getLogger("kadr")
 
@@ -28,7 +32,87 @@ TRANSLATORS = {"local": "На этом Mac — бесплатно",
                "claude-sonnet-5-5": "Claude Sonnet 5.5 — точнее, нужен ключ",
                "claude-opus-5-5": "Claude Opus 5.5 — лучше всех, ×2 к цене"}
 
+EFFORTS = {"eco": "Эконом — лёгкие модели, Mac не тормозит",
+           "balance": "Баланс — точнее, память освобождается",
+           "max": "Максимум — модели всегда наготове"}
+PRESSURE = {1: "в норме", 2: "под нагрузкой", 4: "на пределе"}
+
 status = {"text": "Запускаюсь…", "busy": False, "last": None}
+
+
+class _Usage(ctypes.Structure):   # rusage_info_v0 из <libproc.h>
+    _fields_ = [("uuid", ctypes.c_uint8 * 16)] + [(n, ctypes.c_uint64) for n in (
+        "user", "system", "idle_wkups", "interrupt_wkups", "pageins", "wired", "resident", "footprint",
+        "start", "exit")]
+
+
+class _Timebase(ctypes.Structure):
+    _fields_ = [("numer", ctypes.c_uint32), ("denom", ctypes.c_uint32)]
+
+
+_libc = ctypes.CDLL(None)
+_tb = _Timebase()
+_libc.mach_timebase_info(ctypes.byref(_tb))
+
+
+def usage() -> tuple[float, float]:
+    """(память в ГБ, секунды ЦП). Память — footprint, как в Мониторе системы: RSS не видит GPU-буферы MLX.
+    Время ЦП в rusage — в тиках mach (на Apple Silicon это не наносекунды)."""
+    u = _Usage()
+    _libc.proc_pid_rusage(os.getpid(), 0, ctypes.byref(u))
+    return u.footprint / 2**30, (u.user + u.system) * _tb.numer / _tb.denom / 1e9
+
+
+def pressure() -> int:
+    """Давление памяти macOS: 1 — норма, 2 — предупреждение, 4 — критично."""
+    v, n = ctypes.c_int(0), ctypes.c_size_t(4)
+    _libc.sysctlbyname(b"kern.memorystatus_vm_pressure_level", ctypes.byref(v), ctypes.byref(n), None, 0)
+    return v.value
+
+
+def prefetch():
+    """Докачать недостающие модели на диск (в память не грузит): первое видео не ждёт сеть."""
+    if config.WHISPER_BACKEND != "mlx":
+        return
+    from huggingface_hub import snapshot_download
+    from mlx_lm.utils import DEFAULT_ALLOW_PATTERNS
+
+    repos = [("распознавания", config.WHISPER_MODEL, None)]
+    if config.TRANSLATOR == "local":
+        repos.append(("перевода", config.LOCAL_LLM, DEFAULT_ALLOW_PATTERNS))
+    for what, repo, patterns in repos:
+        try:
+            snapshot_download(repo, local_files_only=True, allow_patterns=patterns)
+        except Exception:
+            if not status["busy"]:
+                status["text"] = f"Загружаю модель {what}…"
+            snapshot_download(repo, allow_patterns=patterns)
+    if not status["busy"]:
+        status["text"] = "Жду видео"
+
+
+def warm():
+    """«Максимум»: модели в памяти заранее, первое видео не ждёт загрузку."""
+    if not status["busy"]:
+        status["text"] = "Загружаю в память…"
+    get_model()
+    if config.TRANSLATOR == "local" and not config.ONE_MODEL:
+        translate_local.warm()
+    if not status["busy"]:
+        status["text"] = "Жду видео"
+
+
+def apply_effort():
+    """После смены нагрузки или переводчика: докачать модели, затем прогреть или освободить память."""
+    try:
+        prefetch()
+        if config.KEEP_MODELS is None:
+            warm()
+        elif not status["busy"]:
+            release()
+    except Exception as e:
+        log.exception("Не удалось применить нагрузку")
+        status["text"] = f"❌ {str(e)[:80]}"
 
 
 class StatusHandler(logging.Handler):
@@ -195,7 +279,7 @@ class AppDelegate(NSObject):
     # ---------- окно ----------
 
     def build_window(self):
-        W, H = 520, 420
+        W, H = 520, 480
         self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             NSMakeRect(0, 0, W, H), 1 | 2 | 4, 2, False)   # titled | closable | miniaturizable
         self.window.setTitle_(f"{config.APP_NAME} {__version__}" + ("" if config.FROZEN else " — dev"))
@@ -203,33 +287,53 @@ class AppDelegate(NSObject):
         self.window.center()
         v = self.window.contentView()
 
-        v.addSubview_(DropView.alloc().initWithFrame_(NSMakeRect(20, 200, W - 40, 200)))
+        v.addSubview_(DropView.alloc().initWithFrame_(NSMakeRect(20, 260, W - 40, 200)))
 
-        self.state = label("", NSMakeRect(20, 166, W - 40, 20))
-        self.progress = NSProgressIndicator.alloc().initWithFrame_(NSMakeRect(20, 148, W - 40, 12))
+        self.state = label("", NSMakeRect(20, 226, W - 40, 20))
+        self.progress = NSProgressIndicator.alloc().initWithFrame_(NSMakeRect(20, 208, W - 40, 12))
         self.progress.setStyle_(0)   # полоска
         self.progress.setMinValue_(0)
         self.progress.setMaxValue_(100)
-        self.result = label("", NSMakeRect(20, 108, W - 190, 20), color=NSColor.secondaryLabelColor())
+        self.result = label("", NSMakeRect(20, 168, W - 190, 20), color=NSColor.secondaryLabelColor())
         self.reveal = NSButton.buttonWithTitle_target_action_("Показать в Finder", self, "revealLast:")
-        self.reveal.setFrame_(NSMakeRect(W - 170, 100, 150, 32))
+        self.reveal.setFrame_(NSMakeRect(W - 170, 160, 150, 32))
         self.reveal.setHidden_(True)
-        sep = NSBox.alloc().initWithFrame_(NSMakeRect(20, 80, W - 40, 1))
+        sep = NSBox.alloc().initWithFrame_(NSMakeRect(20, 140, W - 40, 1))
         sep.setBoxType_(2)   # разделитель
 
-        self.translator = NSPopUpButton.alloc().initWithFrame_pullsDown_(NSMakeRect(86, 30, 250, 26), False)
+        self.translator = NSPopUpButton.alloc().initWithFrame_pullsDown_(NSMakeRect(92, 96, 250, 26), False)
         self.translator.addItemsWithTitles_(list(TRANSLATORS.values()))
         self.translator.setTarget_(self)
         self.translator.setAction_("setTranslator:")
         cur = "local" if config.TRANSLATOR == "local" else config.CLAUDE_MODEL
         self.translator.selectItemAtIndex_(list(TRANSLATORS).index(cur) if cur in TRANSLATORS else 0)
         self.burn = NSButton.checkboxWithTitle_target_action_("Субтитры в картинке", self, "toggleBurn:")
-        self.burn.setFrame_(NSMakeRect(352, 32, 160, 22))
+        self.burn.setFrame_(NSMakeRect(352, 98, 160, 22))
         self.burn.setState_(int(config.BURN))
 
+        self.effort = NSPopUpButton.alloc().initWithFrame_pullsDown_(NSMakeRect(92, 62, 330, 26), False)
+        self.effort.addItemsWithTitles_(list(EFFORTS.values()))
+        self.effort.selectItemAtIndex_(list(EFFORTS).index(config.EFFORT))
+        self.effort.setTarget_(self)
+        self.effort.setAction_("setEffort:")
+        self.effort.setToolTip_("Эконом: Whisper turbo и Gemma, модели выгружаются сразу после видео, "
+                                "обработка в фоне.\nБаланс: Whisper large-v3 и Qwen 9B по очереди, "
+                                "выгрузка через 3 минуты простоя.\nМаксимум: обе модели всегда в памяти.")
+        self.meter = NSLevelIndicator.alloc().initWithFrame_(NSMakeRect(92, 35, 120, 14))
+        self.meter.setLevelIndicatorStyle_(1)   # сплошная полоска
+        self.meter.setMaxValue_(config.RAM_GB)
+        self.meter.setWarningValue_(config.RAM_GB * 0.5)
+        self.meter.setCriticalValue_(config.RAM_GB * 0.75)
+        self.load = label("", NSMakeRect(220, 33, W - 240, 18), size=12)
+        self.models = label("", NSMakeRect(92, 12, W - 112, 16), size=11, color=NSColor.secondaryLabelColor())
+        self._cpu = (time.monotonic(), usage()[1])
+
+        gray = NSColor.secondaryLabelColor()
         for x in (self.state, self.progress, self.result, self.reveal, sep,
-                  label("Перевод:", NSMakeRect(20, 35, 64, 18), color=NSColor.secondaryLabelColor()),
-                  self.translator, self.burn):
+                  label("Перевод:", NSMakeRect(20, 101, 70, 18), color=gray), self.translator, self.burn,
+                  label("Нагрузка:", NSMakeRect(20, 67, 70, 18), color=gray), self.effort,
+                  label("Сейчас:", NSMakeRect(20, 33, 70, 18), color=gray), self.meter, self.load,
+                  self.models):
             v.addSubview_(x)
         self.window.makeKeyAndOrderFront_(None)
 
@@ -251,10 +355,25 @@ class AppDelegate(NSObject):
         else:
             self.progress.stopAnimation_(None)
         self.progress.setHidden_(not (status["busy"] or text.startswith("Загружаю")))
+        self.show_load()
         last = status["last"]
         if last:
             self.result.setStringValue_(f"Готово: {last.name}")
             self.reveal.setHidden_(False)
+
+    def show_load(self):
+        now, (gb, cpu) = time.monotonic(), usage()
+        t0, cpu0 = self._cpu
+        if now - t0 < 1:   # ЦП за ~секунду, а не за 0,3 с между тиками — иначе цифра скачет
+            return
+        self._cpu = (now, cpu)
+        pct = round((cpu - cpu0) / (now - t0) / (os.cpu_count() or 1) * 100)
+        self.meter.setDoubleValue_(gb)
+        self.load.setStringValue_(f"Kadr: {gb:.1f} ГБ из {config.RAM_GB} · ЦП {pct}%".replace(".", ","))
+        names = [n for n, m in (("распознавание", transcribe._model), ("перевод", translate_local._model))
+                 if m is not None]
+        self.models.setStringValue_(("В памяти: " + " и ".join(names) if names else "Модели выгружены")
+                                    + f" · память Mac {PRESSURE.get(pressure(), 'в норме')}")
 
     def revealLast_(self, sender):
         last = status["last"]
@@ -272,6 +391,13 @@ class AppDelegate(NSObject):
             if not config.ANTHROPIC_API_KEY:
                 self.askKey_(None)
         save_settings(TRANSLATOR=config.TRANSLATOR, CLAUDE_MODEL=config.CLAUDE_MODEL)
+        threading.Thread(target=apply_effort, daemon=True).start()
+
+    def setEffort_(self, sender):
+        name = list(EFFORTS)[sender.indexOfSelectedItem()]
+        config.set_effort(name)
+        save_settings(EFFORT=name)
+        threading.Thread(target=apply_effort, daemon=True).start()
 
     def toggleBurn_(self, sender):
         config.BURN = bool(sender.state())
@@ -398,14 +524,9 @@ class AppDelegate(NSObject):
 
 def worker():
     try:
-        status["text"] = "Загружаю модель распознавания…"
-        get_model()
-        if config.TRANSLATOR == "local":
-            from .translate_local import warm
-
-            status["text"] = "Загружаю модель перевода…"
+        prefetch()
+        if config.KEEP_MODELS is None:
             warm()
-        status["text"] = "Жду видео"
         watch.serve(ready=lambda: config.TRANSLATOR == "local" or bool(config.ANTHROPIC_API_KEY))
     except Exception as e:
         log.exception("Ошибка воркера")

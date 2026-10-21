@@ -1,3 +1,4 @@
+import ctypes
 import json
 import os
 import shutil
@@ -76,14 +77,45 @@ SOURCE_LANG = os.getenv("SOURCE_LANG", "ru")
 WHISPER_BACKEND = os.getenv("WHISPER_BACKEND", "mlx")          # mlx | faster
 RAM_GB = int(subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True,
                             text=True).stdout or 0) // 2**30
-# large-v3 в fp16 занимает ~3 GB GPU-памяти; на 8 GB машине берём turbo
-WHISPER_MODEL = os.getenv("WHISPER_MODEL") or (
-    ("mlx-community/whisper-large-v3-mlx" if RAM_GB >= 16 else "mlx-community/whisper-large-v3-turbo")
-    if WHISPER_BACKEND == "mlx" else "large-v3-turbo")
-LOCAL_LLM = os.getenv("LOCAL_LLM") or (
-    "mlx-community/Qwen3.5-9B-MLX-4bit" if RAM_GB >= 16 else "mlx-community/gemma-4-e4b-it-4bit")
-# на 8 GB Whisper и переводчик вместе не помещаются — держим в памяти только одну модель
-LOW_MEMORY = RAM_GB < 16
+# Нагрузка: выбирается в окне вручную, по умолчанию — по объёму памяти.
+# keep — сколько секунд держать модели в памяти после видео (None — всегда, и грузить при старте);
+# both — Whisper и переводчик в памяти одновременно; bg — обработка уступает работе пользователя
+EFFORTS = {
+    "eco": {"whisper": "mlx-community/whisper-large-v3-turbo", "llm": "mlx-community/gemma-4-e4b-it-4bit",
+            "keep": 0, "both": False, "bg": True},
+    "balance": {"whisper": "mlx-community/whisper-large-v3-mlx", "llm": "mlx-community/Qwen3.5-9B-MLX-4bit",
+                "keep": 180, "both": False, "bg": False},
+    "max": {"whisper": "mlx-community/whisper-large-v3-mlx", "llm": "mlx-community/Qwen3.5-9B-MLX-4bit",
+            "keep": None, "both": True, "bg": False},
+}
+
+
+def set_effort(name: str):
+    global EFFORT, WHISPER_MODEL, LOCAL_LLM, KEEP_MODELS, ONE_MODEL
+    p = EFFORTS[name]
+    EFFORT, KEEP_MODELS = name, p["keep"]
+    # явные модели из .env важнее профиля
+    WHISPER_MODEL = os.getenv("WHISPER_MODEL") or (p["whisper"] if WHISPER_BACKEND == "mlx" else "large-v3-turbo")
+    LOCAL_LLM = os.getenv("LOCAL_LLM") or p["llm"]
+    # на 8 GB Whisper и переводчик вместе не помещаются при любом профиле
+    ONE_MODEL = not p["both"] or RAM_GB < 16
+
+
+_libc = ctypes.CDLL(None)
+
+
+def job_qos():
+    """Вызывать в рабочем потоке перед тяжёлым этапом. bg → QoS utility: поток уступает приложениям
+    пользователя, но не заперт на E-ядрах, как PRIO_DARWIN_BG (тот замедлял обработку втрое).
+    nice не подходит: вернуть приоритет обратно без root нельзя, а нагрузку переключают на лету."""
+    _libc.pthread_set_qos_class_self_np(0x11 if EFFORTS[EFFORT]["bg"] else 0x15, 0)   # UTILITY | DEFAULT
+
+
+set_effort(os.getenv("EFFORT") if os.getenv("EFFORT") in EFFORTS else "balance" if RAM_GB >= 16 else "eco")
+
+# освобождённые буферы MLX держит у себя для повторного использования; без лимита они копятся
+MLX_CACHE = int(float(os.getenv("MLX_CACHE_GB", "1")) * 2**30)
+
 # только для faster-whisper (Intel)
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu")
 WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")

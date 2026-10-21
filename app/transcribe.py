@@ -15,10 +15,25 @@ from .srt_utils import Cue, Word, words_to_cues
 log = logging.getLogger(__name__)
 
 _model = None
+_name = _path = None   # какая модель загружена и откуда
 _model_lock = threading.Lock()
 _devnull = open(os.devnull, "w")
 # MLX привязывает GPU-stream к потоку, где создана модель: вся работа с ней — в одном потоке
 _mlx_thread = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mlx")
+
+
+def local_path(repo: str, patterns: list[str] | None = None) -> str:
+    """Путь к скачанной модели. По имени репозитория mlx-whisper и mlx_lm при каждой загрузке ходят
+    в сеть проверять обновления: модель грузится к каждому видео, и сбой Hugging Face ронял задачу.
+    patterns — те же, с какими модель качали, иначе снимок без README считается неполным."""
+    from huggingface_hub import snapshot_download
+
+    if Path(repo).exists():
+        return repo
+    try:
+        return snapshot_download(repo, local_files_only=True, allow_patterns=patterns)
+    except Exception:
+        return snapshot_download(repo, allow_patterns=patterns)
 
 
 def get_model():
@@ -29,22 +44,36 @@ def get_model():
 
 
 def unload():
-    """Освободить память под переводчик (LOW_MEMORY). Вызывать в потоке MLX."""
-    global _model
+    """Освободить память под переводчик (ONE_MODEL). Вызывать в потоке MLX."""
     with _model_lock:
-        if _model is not None and config.WHISPER_BACKEND == "mlx":
-            import mlx.core as mx
-            from mlx_whisper.transcribe import ModelHolder
+        _unload()
 
-            _model = ModelHolder.model = None
-            mx.clear_cache()
+
+def _unload():
+    global _model
+    if _model is not None and config.WHISPER_BACKEND == "mlx":
+        import mlx.core as mx
+        from mlx_whisper.transcribe import ModelHolder
+
+        _model = ModelHolder.model = None
+        mx.clear_cache()
+
+
+def release():
+    """Выгрузить и Whisper, и переводчик: простой или смена нагрузки."""
+    from . import translate_local
+
+    if config.WHISPER_BACKEND == "mlx":
+        _mlx_thread.submit(lambda: (unload(), translate_local.unload())).result()
 
 
 def _load():
-    global _model
+    global _model, _name, _path
     with _model_lock:
+        if _name != config.WHISPER_MODEL:   # нагрузку переключили — модель другая
+            _unload()
         if _model is None:
-            if config.LOW_MEMORY and config.WHISPER_BACKEND == "mlx":
+            if config.ONE_MODEL and config.WHISPER_BACKEND == "mlx":
                 from . import translate_local
 
                 translate_local.unload()
@@ -53,7 +82,9 @@ def _load():
                 import mlx.core as mx
                 from mlx_whisper.transcribe import ModelHolder
 
-                _model = ModelHolder.get_model(config.WHISPER_MODEL, mx.float16)
+                _path = local_path(config.WHISPER_MODEL)
+                _model = ModelHolder.get_model(_path, mx.float16)
+                mx.set_cache_limit(config.MLX_CACHE)
             else:
                 from faster_whisper import WhisperModel
 
@@ -64,6 +95,7 @@ def _load():
                     cpu_threads=config.WHISPER_THREADS,
                     download_root=config.MODELS_DIR,
                 )
+            _name = config.WHISPER_MODEL
             log.info("Whisper загружен")
     return _model
 
@@ -81,6 +113,8 @@ def transcribe(audio: Path, on_progress: Callable[[float], None] | None = None,
 
 def _transcribe_mlx(audio, on_progress, hint) -> list[Word]:
     import importlib
+
+    config.job_qos()
 
     import tqdm
 
@@ -104,7 +138,7 @@ def _transcribe_mlx(audio, on_progress, hint) -> list[Word]:
         pcm = np.frombuffer(w.readframes(w.getnframes()), np.int16).astype(np.float32) / 32768.0
     res = mt.transcribe(
         pcm,
-        path_or_hf_repo=config.WHISPER_MODEL,
+        path_or_hf_repo=_path,               # тот же путь, что в _load: ModelHolder не грузит заново
         verbose=False,                       # False = включить tqdm (None его выключает)
         language=config.SOURCE_LANG,
         task="transcribe",
