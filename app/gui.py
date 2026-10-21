@@ -388,6 +388,7 @@ class AppDelegate(NSObject):
             config.TRANSLATOR = "local"
         else:
             config.TRANSLATOR, config.CLAUDE_MODEL = "claude", k
+            config.load_key()
             if not config.ANTHROPIC_API_KEY:
                 self.askKey_(None)
         save_settings(TRANSLATOR=config.TRANSLATOR, CLAUDE_MODEL=config.CLAUDE_MODEL)

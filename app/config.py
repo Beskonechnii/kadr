@@ -33,17 +33,6 @@ if FROZEN:
     HOME = Path.home() / "Movies" / APP_NAME
     INBOX, DONE, FAILED = (HOME / d for d in ("Входящие", "Готово", "Ошибки"))
     LOGS = Path.home() / "Library/Logs" / APP_NAME
-    try:
-        import keyring.backends.macOS
-
-        kc = keyring.backends.macOS.Keyring()
-        key = kc.get_password(APP_NAME, "anthropic")
-        if key is None and (key := kc.get_password(OLD_NAME, "anthropic")):
-            # старую не удаляем: из нового .app это не вышло, а ошибка срывала загрузку ключа
-            kc.set_password(APP_NAME, "anthropic", key)
-        os.environ.setdefault("ANTHROPIC_API_KEY", key or "")
-    except Exception:
-        pass
 else:
     from dotenv import load_dotenv
 
@@ -72,6 +61,29 @@ CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5")
 # local — LLM на этом Mac через MLX (бесплатно); claude — Claude API (лучше, нужен ключ и баланс)
 TRANSLATOR = os.getenv("TRANSLATOR", "local")
 TRANSLATE_PARALLEL = int(os.getenv("TRANSLATE_PARALLEL", "3"))
+
+
+def load_key():
+    """Ключ из Связки ключей — только когда нужен Claude. .app подписан ad-hoc: после каждого обновления
+    macOS считает его новым приложением и спрашивает пароль на доступ к записи, даже при локальном переводе."""
+    global ANTHROPIC_API_KEY
+    if ANTHROPIC_API_KEY or not FROZEN:
+        return
+    try:
+        import keyring.backends.macOS
+
+        kc = keyring.backends.macOS.Keyring()
+        key = kc.get_password(APP_NAME, "anthropic")
+        if key is None and (key := kc.get_password(OLD_NAME, "anthropic")):
+            # старую не удаляем: из нового .app это не вышло, а ошибка срывала загрузку ключа
+            kc.set_password(APP_NAME, "anthropic", key)
+        ANTHROPIC_API_KEY = key or ""
+    except Exception:
+        pass
+
+
+if TRANSLATOR == "claude":
+    load_key()
 
 SOURCE_LANG = os.getenv("SOURCE_LANG", "ru")
 WHISPER_BACKEND = os.getenv("WHISPER_BACKEND", "mlx")          # mlx | faster
