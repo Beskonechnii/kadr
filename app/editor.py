@@ -18,7 +18,7 @@ from Foundation import NSData, NSHTTPURLResponse, NSObject, NSURL, NSURLRequest
 from PyObjCTools import AppHelper
 from WebKit import WKContentWorld, WKUserScript, WKWebView, WKWebViewConfiguration
 
-from . import media, project, style
+from . import config, media, project, style
 from .srt_utils import Cue
 
 log = logging.getLogger(__name__)
@@ -132,13 +132,18 @@ class Session:
         style.save_user(default=(fmt, preset))
         return style.defaults()
 
-    def cmd_retranslate(self, i, proj=None):
-        """Перевод одной реплики заново — после правки русского текста или разрезания."""
+    def cmd_retranslate(self, i, proj=None, limit=None):
+        """Перевод одной реплики заново — после правки русского текста или разрезания; limit — «Сократить»."""
         from .translate import translate_one
 
         self._take(proj)
         cues = [Cue(n + 1, c["start"], c["end"], c.get("ru") or c["en"]) for n, c in enumerate(self.proj["cues"])]
-        return asyncio.run(translate_one(cues, i, self.proj.get("context", "")))
+        return asyncio.run(translate_one(cues, i, self.proj.get("context", ""), limit))
+
+    def cmd_remember_fix(self, find, repl):
+        """«Запомнить» замену: дальше её делает сам конвейер после распознавания и перевода."""
+        config.FIXES.write_text(json.dumps({**config.fixes(), find: repl}, ensure_ascii=False, indent=1), encoding="utf-8")
+        return True
 
     def cmd_reveal(self):
         f = self.pj.parent / (self.proj["files"].get("burned") or "")

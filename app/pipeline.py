@@ -8,8 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from . import media
-from .srt_utils import write_srt
+from . import config, media
+from .srt_utils import apply_fixes, write_srt
 from .transcribe import transcribe
 from .translate import translate_cues
 
@@ -60,7 +60,7 @@ async def run(job_dir: Path, src: Path, user_context: str, progress: Progress,
             asyncio.run_coroutine_threadsafe(progress(f"📝 Распознаю русскую речь… {pct}%"), loop)
 
     hint = (hint or user_context or "")[:200] or None
-    ru_cues = await asyncio.to_thread(transcribe, wav, on_tr_progress, hint)
+    ru_cues = apply_fixes(await asyncio.to_thread(transcribe, wav, on_tr_progress, hint), config.fixes())
     if not ru_cues:
         raise RuntimeError("Речь не найдена в файле.")
     ru_srt = job_dir / f"{stem}.ru.srt"
@@ -72,7 +72,7 @@ async def run(job_dir: Path, src: Path, user_context: str, progress: Progress,
     async def on_tl_progress(p: float):
         await progress(f"🌍 Перевожу на английский… {int(p * 100)}%")
 
-    en_cues = await translate_cues(ru_cues, user_context, on_tl_progress)
+    en_cues = apply_fixes(await translate_cues(ru_cues, user_context, on_tl_progress), config.fixes())
     en_srt = job_dir / f"{stem}.en.srt"
     write_srt(en_cues, en_srt)
     lap("translate")

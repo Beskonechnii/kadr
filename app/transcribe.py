@@ -150,7 +150,7 @@ def _transcribe_mlx(audio, on_progress, hint) -> list[Word]:
     words: list[Word] = []
     for seg in res["segments"]:
         if seg.get("words"):
-            words.extend(Word(w["start"], w["end"], w["word"]) for w in seg["words"])
+            words.extend(Word(w["start"], w["end"], w["word"], w.get("probability", 1.0)) for w in seg["words"])
         elif seg["text"].strip():
             words.append(Word(seg["start"], seg["end"], seg["text"]))
     return words
@@ -172,7 +172,7 @@ def _transcribe_faster(audio, on_progress, hint) -> list[Word]:
     words: list[Word] = []
     for seg in segments:
         if seg.words:
-            words.extend(Word(w.start, w.end, w.word) for w in seg.words)
+            words.extend(Word(w.start, w.end, w.word, w.probability) for w in seg.words)
         else:
             words.append(Word(seg.start, seg.end, seg.text))
         if on_progress:

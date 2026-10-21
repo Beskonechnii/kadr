@@ -15,7 +15,23 @@
   <button id="rebuild" class="primary">Пересобрать видео</button>
 </header>
 <main>
-  <aside id="list"></aside>
+  <aside id="left">
+    <div id="listbar">
+      <input id="find" type="search" placeholder="Найти в репликах (⌘F)" spellcheck="false">
+      <div id="replrow" class="row" hidden>
+        <input id="repl" placeholder="Заменить на" spellcheck="false">
+        <button id="replall">Заменить</button>
+      </div>
+      <label id="remrow" class="row" hidden title="Новые видео: заменять само после распознавания и перевода">
+        <input type="checkbox" id="remember"> Запомнить для новых видео</label>
+      <div class="row">
+        <label class="row"><input type="checkbox" id="onlybad"> Только проблемные <span id="badn"></span></label>
+        <span class="grow"></span>
+        <button id="retrall" hidden></button>
+      </div>
+    </div>
+    <div id="list"></div>
+  </aside>
   <section id="center">
     <div id="area">
       <div id="stage">
@@ -29,6 +45,7 @@
     <div id="controls">
       <button id="play" title="Пробел">▶︎</button>
       <span id="time">0:00.0</span>
+      <button id="add" title="Новая реплика в паузе под курсором видео">+ Реплика</button>
       <div id="track" title="Колёсико — масштаб, края реплики тянутся"><div id="lane"><div id="speech"></div><div id="blocks"></div><div id="head"></div></div></div>
     </div>
   </section>
@@ -71,7 +88,9 @@
     <label>По горизонтали <input type="range" data-k="x" min="5" max="95" step="0.5"><output></output></label>
     <label>По вертикали <input type="range" data-k="y" min="5" max="99" step="0.5"><output></output></label>
     <label>Сетка <select id="gridsel"></select></label>
-    <p class="hint">Перетащите субтитр на видео, двойной клик — правка текста.<br>⌘B — разрезать реплику по курсору в тексте или по позиции видео.</p>
+    <p class="hint">Перетащите субтитр на видео, двойной клик — правка текста.<br>⌘B — разрезать реплику по курсору в тексте или по позиции видео.<br>
+      ⌘Z / ⇧⌘Z — отменить / повторить. ↑↓ — соседняя реплика, [ ] — начало / конец реплики на позицию видео,
+      ⌘⌫ — удалить реплику.</p>
   </aside>
 </main>
 <dialog id="namedlg">

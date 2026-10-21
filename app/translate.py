@@ -164,9 +164,13 @@ async def translate_cues(cues: list[Cue], user_context: str = "",
     return out
 
 
-async def translate_one(cues: list[Cue], i: int, user_context: str = "") -> str:
-    """Перевести заново одну реплику из редактора; предыдущие — контекстом, как при переводе целиком."""
+async def translate_one(cues: list[Cue], i: int, user_context: str = "", limit: int | None = None) -> str:
+    """Перевести заново одну реплику из редактора; предыдущие — контекстом, как при переводе целиком.
+    limit — сколько знаков успевают прочитать за время реплики («Сократить» у быстрых реплик)."""
     prev = cues[max(0, i - OVERLAP):i]
+    if limit:
+        user_context += (f"\n\nLine {cues[i].idx} is on screen too briefly to read: its English must be at most "
+                         f"{limit} characters. Rephrase it shorter and drop anything non-essential.")
     if config.TRANSLATOR == "local":
         from .translate_local import _translate_chunk as local
         from .transcribe import _mlx_thread
