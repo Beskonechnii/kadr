@@ -87,12 +87,31 @@ document.fonts.addEventListener('loadingdone', () => drawBox())
 
 // ---------- рамка субтитра: перетаскивание и правка на кадре ----------
 const measure = document.createElement('canvas').getContext('2d')
+// начала слов перевода — та же раскладка, что style._timed_words: по слогам, только там, где звучит голос
+function wordStarts(c, words) {
+  let spans = (proj.speech || []).filter(([a, b]) => b > c.start && a < c.end)
+    .map(([a, b]) => [Math.max(a, c.start), Math.min(b, c.end)])
+  if (spans.reduce((t, [a, b]) => t + b - a, 0) < 0.3) {
+    const ru = c.words || [], a = ru.length ? Math.max(ru[0][0], c.start) : c.start
+    spans = [[a, Math.min(Math.max(ru.length ? ru.at(-1)[1] : c.end, a + 0.3), c.end)]]
+  }
+  const total = spans.reduce((t, [a, b]) => t + b - a, 0)
+  const syl = words.map(w => Math.max(1, (w.toLowerCase().match(/[aeiouyаеёиоуыэюя]+/g) || []).length))
+  const sum = syl.reduce((x, y) => x + y, 0)
+  let acc = 0
+  return syl.map(n => {
+    let x = total * acc / sum
+    acc += n
+    for (const [a, b] of spans) { if (x < b - a) return a + x; x -= b - a }
+    return spans.at(-1)[1]
+  })
+}
 function shownText(c, s) {
   if (!s.words) return c.en
-  // «слов на экране»: та группа, что звучит сейчас (тайминги слов примерные, как в style.py)
+  // «слов на экране»: та группа, что звучит сейчас
   const words = c.en.split(/\s+/).filter(Boolean), n = s.words
-  const k = Math.min(words.length - 1, Math.floor((v.currentTime - c.start) / (c.end - c.start) * words.length))
-  const g = Math.max(0, Math.floor(k / n) * n)
+  const k = Math.max(0, wordStarts(c, words).findLastIndex(t => t <= v.currentTime))
+  const g = Math.floor(k / n) * n
   return words.slice(g, g + n).join(' ')
 }
 function drawBox() {

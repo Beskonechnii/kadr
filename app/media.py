@@ -43,6 +43,26 @@ async def extract_audio(src: Path, dst: Path) -> Path:
     return dst
 
 
+def speech_spans(wav: Path) -> list[list[float]]:
+    """Где в записи звучит голос: [[начало, конец], …]. Whisper тянет слова через паузы, а перевод
+    раскладывается по этим отрезкам — иначе английское слово загорается в тишину."""
+    import numpy as np
+    x = np.frombuffer(wav.read_bytes()[44:], np.int16).astype(np.float32)   # 16 kHz mono после extract_audio
+    fr = x[:len(x) // 320 * 320].reshape(-1, 320)                           # кадры по 20 мс
+    spec = np.abs(np.fft.rfft(fr * np.hanning(320), axis=1)) ** 2
+    db = 10 * np.log10(spec[:, 4:71].sum(1) + 1)    # 200–3500 Гц: голос, без гула и шипения
+    lo, hi = np.percentile(db, [10, 95])
+    on = db > lo + 0.4 * (hi - lo)                  # порог от уровня самой записи: тихий микрофон, музыка фоном
+    spans: list[list[float]] = []
+    for i in np.flatnonzero(on):
+        t = float(i) * 0.02
+        if spans and t - spans[-1][1] < 0.2:        # провалы короче 200 мс — между слогами, не пауза
+            spans[-1][1] = t + 0.02
+        else:
+            spans.append([t, t + 0.02])
+    return [[round(float(a), 2), round(float(b), 2)] for a, b in spans if b - a >= 0.1]
+
+
 # то, что QuickTime/iPhone играют из MP4 без перекодирования; остальное — в MKV
 MP4_VIDEO = {"h264", "hevc"}
 MP4_AUDIO = {"aac", "mp3", "alac", "ac3", "eac3"}

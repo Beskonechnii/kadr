@@ -109,25 +109,42 @@ def _esc(text: str) -> str:
     return text.replace("\\", "").replace("{", "(").replace("}", ")")
 
 
-def _timed_words(cue: dict) -> list[tuple[float, float, str]]:
-    """Слова перевода с примерными таймингами: у английского своих нет, раскладываем по длине слов
-    на отрезок, где по распознаванию звучит речь (без «хвоста» реплики)."""
+def _syllables(w: str) -> int:
+    # говорят слогами, а не буквами: «strengths» короче «idea»
+    return max(1, len(re.findall(r"[aeiouyаеёиоуыэюя]+", w.lower())))
+
+
+def _timed_words(cue: dict, speech: list | None = None) -> list[tuple[float, float, str]]:
+    """Слова перевода с примерными таймингами: своих у английского нет, раскладываем по слогам
+    только на отрезки, где в реплике звучит голос, — паузы пропускаем."""
     words = cue["en"].split()
     if not words:
         return []
-    ru = cue.get("words") or []
-    a, b = (ru[0][0], ru[-1][1]) if ru else (cue["start"], cue["end"])
-    a, b = max(a, cue["start"]), min(max(b, a + 0.3), cue["end"])
-    total = sum(len(w) + 1 for w in words)
-    out, t = [], a
-    for w in words:
-        d = (b - a) * (len(w) + 1) / total
-        out.append((t, t + d, w))
-        t += d
+    s, e = cue["start"], cue["end"]
+    spans = [(max(a, s), min(b, e)) for a, b in speech or [] if b > s and a < e]
+    if sum(b - a for a, b in spans) < 0.3:   # голоса не нашли (старый проект, шум) — по словам Whisper
+        ru = cue.get("words") or []
+        a = max(ru[0][0], s) if ru else s
+        spans = [(a, min(max(ru[-1][1] if ru else e, a + 0.3), e))]
+    lens = [b - a for a, b in spans]
+    total, syl = sum(lens), [_syllables(w) for w in words]
+
+    def at(x, end=False):   # x секунд речи от начала реплики → время в видео; начало слова на стыке — уже после паузы
+        for (a, _), d in zip(spans, lens):
+            if x < d or end and x <= d:
+                return a + x
+            x -= d
+        return spans[-1][1]
+
+    out, acc = [], 0
+    for w, n in zip(words, syl):
+        x = total * acc / sum(syl)
+        acc += n
+        out.append((at(x), at(total * acc / sum(syl), True), w))
     return out
 
 
-def build_ass(cues: list[dict], style: dict, w: int, h: int) -> str:
+def build_ass(cues: list[dict], style: dict, w: int, h: int, speech: list | None = None) -> str:
     s = style
     short = min(w, h)
     size = round(short * s["size"] / 100)
@@ -169,7 +186,7 @@ def build_ass(cues: list[dict], style: dict, w: int, h: int) -> str:
     for cue in cues:
         if not cue["en"].strip():
             continue
-        words = _timed_words(cue)
+        words = _timed_words(cue, speech)
         groups = [words[i:i + s["words"]] for i in range(0, len(words), s["words"])] if s["words"] else [words]
         for gi, g in enumerate(groups):
             a = g[0][0] if s["words"] else cue["start"]

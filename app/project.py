@@ -28,7 +28,7 @@ def probe(path: Path) -> dict:
     return json.loads(out)
 
 
-def build(ru: list[Cue], en: list[Cue], info: dict) -> dict:
+def build(ru: list[Cue], en: list[Cue], info: dict, speech: list | None = None) -> dict:
     w, h = display_size(info)
     fmt = style.fmt_of(w, h)
     # переводчики сохраняют тайминги реплик, но выкидывают пустые и перенумеровывают — связываем по началу
@@ -37,11 +37,13 @@ def build(ru: list[Cue], en: list[Cue], info: dict) -> dict:
              "words": [[round(x.start, 3), round(x.end, 3), x.text] for x in c.words]} for c in ru]
     return {"version": 1, "width": w, "height": h, "format": fmt,
             "duration": float(info.get("format", {}).get("duration", 0)),
-            "style": {"preset": style.defaults()[fmt]}, "cues": [c for c in cues if c["en"]], "files": {}}
+            "style": {"preset": style.defaults()[fmt]}, "cues": [c for c in cues if c["en"]], "files": {},
+            "speech": speech or []}
 
 
 def ass(proj: dict) -> str:
-    return style.build_ass(proj["cues"], style.resolve(proj["style"], proj["format"]), proj["width"], proj["height"])
+    return style.build_ass(proj["cues"], style.resolve(proj["style"], proj["format"]), proj["width"], proj["height"],
+                           proj.get("speech"))
 
 
 def save(pj: Path, proj: dict):

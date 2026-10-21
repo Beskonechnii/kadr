@@ -161,7 +161,7 @@ async def process(src: Path, out_dir: Path, user_context: str, hint: str | None,
             r = await pipeline.run(work, src, user_context, progress, hint)
             res = Result([], r.cues, r.extra["timings"])
             if r.is_video:
-                proj = project.build(r.ru_cues, r.en_cues, await media.probe(src))
+                proj = project.build(r.ru_cues, r.en_cues, await media.probe(src), r.speech)
             if burn and r.is_video:
                 t = time.monotonic()
                 await progress("🔥 Прожигаю EN-субтитры в видео…")

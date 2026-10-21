@@ -28,6 +28,7 @@ class JobResult:
     ru_cues: list = field(default_factory=list)
     en_cues: list = field(default_factory=list)
     extra: dict = field(default_factory=dict)
+    speech: list = field(default_factory=list)   # где звучит голос — для подсветки перевода
 
 
 async def run(job_dir: Path, src: Path, user_context: str, progress: Progress,
@@ -85,6 +86,10 @@ async def run(job_dir: Path, src: Path, user_context: str, progress: Progress,
         except Exception:
             log.exception("Не удалось собрать видео с дорожками")
         lap("subs_video")
+    try:
+        result.speech = await asyncio.to_thread(media.speech_spans, wav)
+    except Exception:
+        log.exception("Не удалось найти паузы в речи")
     try:
         wav.unlink()
     except OSError:

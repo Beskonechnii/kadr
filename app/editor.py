@@ -8,6 +8,7 @@ import logging
 import mimetypes
 import shutil
 import subprocess
+import tempfile
 import threading
 from pathlib import Path
 
@@ -92,6 +93,14 @@ class Session:
         self.pj = pj
         self.proj = project.load(pj)
         self.web = None
+        v = project.video(pj.parent, self.proj)
+        if not self.proj.get("speech") and v:   # проект до 1.3: паузы в речи ищем по звуку видео
+            try:
+                with tempfile.TemporaryDirectory() as t:
+                    asyncio.run(media.extract_audio(v, Path(t) / "a.wav"))
+                    self.proj["speech"] = media.speech_spans(Path(t) / "a.wav")
+            except Exception:
+                log.exception("Редактор: не нашёл паузы в речи")
 
     def _take(self, proj):
         if proj is not None:
