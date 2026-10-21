@@ -7,11 +7,27 @@ from functools import lru_cache
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-APP_NAME = "Субтитры"
+APP_NAME = "Kadr"
+OLD_NAME = "Субтитры"   # имя до 1.1: от него зависят папки, запись в Keychain и Quick Action у тех, кто ставил 1.0
 # собрано PyInstaller-ом в .app: настройки — settings.json + Keychain, а не .env
 FROZEN = getattr(sys, "frozen", False)
 
+
+def _migrate_dirs():
+    lib = Path.home() / "Library"
+    for base in (lib / "Application Support", Path.home() / "Movies", lib / "Logs"):
+        if (base / OLD_NAME).is_dir() and not (base / APP_NAME).exists():
+            (base / OLD_NAME).rename(base / APP_NAME)
+    # Quick Action из 1.0 открывает приложение по старому bundle id — без правки он запустит старое .app или ничего
+    wf = lib / "Services/Сделать субтитры.workflow/Contents/document.wflow"
+    try:
+        wf.write_bytes(wf.read_bytes().replace(b"local.subbot.subtitles", b"local.kadr.app"))
+    except OSError:
+        pass
+
+
 if FROZEN:
+    _migrate_dirs()
     DATA = Path.home() / "Library/Application Support" / APP_NAME
     HOME = Path.home() / "Movies" / APP_NAME
     INBOX, DONE, FAILED = (HOME / d for d in ("Входящие", "Готово", "Ошибки"))
@@ -19,8 +35,12 @@ if FROZEN:
     try:
         import keyring.backends.macOS
 
-        os.environ.setdefault("ANTHROPIC_API_KEY",
-                              keyring.backends.macOS.Keyring().get_password(APP_NAME, "anthropic") or "")
+        kc = keyring.backends.macOS.Keyring()
+        key = kc.get_password(APP_NAME, "anthropic")
+        if key is None and (key := kc.get_password(OLD_NAME, "anthropic")):
+            # старую не удаляем: из нового .app это не вышло, а ошибка срывала загрузку ключа
+            kc.set_password(APP_NAME, "anthropic", key)
+        os.environ.setdefault("ANTHROPIC_API_KEY", key or "")
     except Exception:
         pass
 else:

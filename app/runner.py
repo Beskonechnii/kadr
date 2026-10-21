@@ -17,7 +17,7 @@ from . import config, media, pipeline
 from .srt_utils import read_srt, write_srt
 from .translate import translate_cues
 
-log = logging.getLogger("subbot")
+log = logging.getLogger("kadr")
 
 MEDIA_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm", ".ts", ".mts", ".3gp",
              ".m4a", ".mp3", ".wav", ".aac", ".ogg", ".opus", ".flac"}
@@ -28,12 +28,12 @@ def setup_logging():
     config.LOGS.mkdir(parents=True, exist_ok=True)
     root = logging.getLogger()
     root.setLevel(logging.INFO)
-    fh = RotatingFileHandler(config.LOGS / "subbot.log", maxBytes=2_000_000, backupCount=5,
+    fh = RotatingFileHandler(config.LOGS / "kadr.log", maxBytes=2_000_000, backupCount=5,
                              encoding="utf-8")
     fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     ch = logging.StreamHandler()
     ch.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%H:%M:%S"))
-    ch.addFilter(lambda r: r.name == "subbot" or r.levelno >= logging.WARNING)
+    ch.addFilter(lambda r: r.name == "kadr" or r.levelno >= logging.WARNING)
     root.addHandler(fh)
     root.addHandler(ch)
     for noisy in ("httpx", "httpx2", "httpcore", "anthropic", "huggingface_hub", "urllib3", "watchdog"):
@@ -72,7 +72,7 @@ def _read(p: Path) -> str:
         return ""
 
 
-def notify(text: str, title: str = "Субтитры"):
+def notify(text: str, title: str = config.APP_NAME):
     # текст через argv — без экранирования кавычек в AppleScript
     subprocess.run(["osascript", "-e", "on run argv", "-e",
                     "display notification (item 1 of argv) with title (item 2 of argv)",

@@ -21,9 +21,9 @@ from PyObjCTools import AppHelper
 from . import __version__, config, runner, watch
 from .transcribe import get_model
 
-log = logging.getLogger("subbot")
+log = logging.getLogger("kadr")
 
-BUNDLE_ID = "local.subbot.subtitles"
+BUNDLE_ID = "local.kadr.app"
 TRANSLATORS = {"local": "На этом Mac — бесплатно",
                "claude-sonnet-5-5": "Claude Sonnet 5.5 — точнее, нужен ключ",
                "claude-opus-5-5": "Claude Opus 5.5 — лучше всех, ×2 к цене"}
@@ -35,7 +35,7 @@ class StatusHandler(logging.Handler):
     """Строки прогресса из runner/watch → в окно; отдельного канала прогресса нет."""
 
     def emit(self, record):
-        if record.name != "subbot":
+        if record.name != "kadr":
             return
         msg = record.getMessage()
         if "📁 " in msg:
@@ -339,7 +339,7 @@ class AppDelegate(NSObject):
         subprocess.run(["open", str(d)])
 
     def openLog_(self, sender):
-        subprocess.run(["open", str(config.LOGS / "subbot.log")])
+        subprocess.run(["open", str(config.LOGS / "kadr.log")])
 
     def editContext_(self, sender):
         f = config.GLOBAL_CONTEXT

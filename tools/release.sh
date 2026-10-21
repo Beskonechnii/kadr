@@ -30,4 +30,4 @@ echo "v$old → v$new, собираю…"
 
 packaging/build_app.sh
 git push -q origin main v$new
-gh release create v$new Субтитры.zip --title "Субтитры $new" --notes "$notes"
+gh release create v$new Kadr.zip --title "Kadr $new" --notes "$notes"

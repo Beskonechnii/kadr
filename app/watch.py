@@ -16,7 +16,7 @@ from watchdog.observers import Observer
 from . import config, runner
 from .transcribe import get_model
 
-log = logging.getLogger("subbot")
+log = logging.getLogger("kadr")
 
 jobs: queue.Queue[Path] = queue.Queue()
 queued: set[Path] = set()

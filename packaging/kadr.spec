@@ -1,4 +1,4 @@
-# PyInstaller: python -m PyInstaller packaging/subtitles.spec (из корня проекта)
+# PyInstaller: python -m PyInstaller packaging/kadr.spec (из корня проекта)
 import sys
 from pathlib import Path
 
@@ -27,18 +27,18 @@ a = Analysis(
               "tensorflow", "jax", "flax"],
 )
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="Subtitles", console=False,
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="Kadr", console=False,
           target_arch="arm64", argv_emulation=False)
-coll = COLLECT(exe, a.binaries, a.datas, name="Subtitles")
+coll = COLLECT(exe, a.binaries, a.datas, name="Kadr")
 app = BUNDLE(
     coll,
-    name="Субтитры.app",
-    icon=str(HERE / "build/Subtitles.icns"),
-    bundle_identifier="local.subbot.subtitles",
+    name="Kadr.app",
+    icon=str(HERE / "build/Kadr.icns"),
+    bundle_identifier="local.kadr.app",
     version=__version__,
     info_plist={
-        "CFBundleName": "Субтитры",
-        "CFBundleDisplayName": "Субтитры",
+        "CFBundleName": "Kadr",
+        "CFBundleDisplayName": "Kadr",
         "LSMinimumSystemVersion": "15.0",    # = минимум колёс mlx и сборки ffmpeg
         "NSHumanReadableCopyright": "Whisper (MIT), FFmpeg (LGPL 2.1), libass (ISC)",
         "CFBundleDocumentTypes": [{

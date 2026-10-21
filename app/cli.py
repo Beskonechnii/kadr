@@ -9,7 +9,7 @@ from pathlib import Path
 from . import config, runner
 from .transcribe import get_model
 
-log = logging.getLogger("subbot")
+log = logging.getLogger("kadr")
 
 
 def main():

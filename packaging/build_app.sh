@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Собирает Субтитры.app, Субтитры.zip и «Как установить.txt» в корень проекта. Нужен Mac на Apple Silicon.
+# Собирает Kadr.app, Kadr.zip и «Как установить.txt» в корень проекта. Нужен Mac на Apple Silicon.
 set -euo pipefail
 HERE=${0:A:h}
 ROOT=${HERE:h}
@@ -22,11 +22,11 @@ fi
 $PIP --reinstall -r $HERE/requirements-app.txt pyinstaller
 $PIP --no-deps mlx-whisper==0.4.3
 
-$ROOT/.venv/bin/python $HERE/make_icon.py $B/Subtitles.icns >/dev/null
+$ROOT/.venv/bin/python $HERE/make_icon.py $B/Kadr.icns >/dev/null
 cd $ROOT
 $VENV/bin/python -m PyInstaller --noconfirm --log-level WARN \
-  --workpath $B/pyinstaller --distpath $B/dist $HERE/subtitles.spec
-APP=$B/dist/Субтитры.app
+  --workpath $B/pyinstaller --distpath $B/dist $HERE/kadr.spec
+APP=$B/dist/Kadr.app
 codesign --force --deep --sign - $APP
 
 # ни один бинарник не должен требовать macOS новее MIN_MACOS
@@ -36,14 +36,14 @@ bad=$(find $APP -type f \( -name "*.so" -o -name "*.dylib" -o -perm +111 \) -pri
       if [[ -n $m && $(printf '%s\n' $m $MIN_MACOS | sort -V | tail -1) != $MIN_MACOS ]]; then echo "$m $f"; fi
     done)
 [[ -z $bad ]] || { echo "Требуют macOS новее $MIN_MACOS:\n$bad" >&2; exit 1; }
-# в корень: приложение + гайд; zip = папка «Субтитры» с тем же для знакомых
+# в корень: приложение + гайд; zip = папка «Kadr» с тем же для знакомых
 DOCS=$ROOT/docs
-rm -rf $ROOT/Субтитры.app && ditto $APP $ROOT/Субтитры.app
+rm -rf $ROOT/Kadr.app && ditto $APP $ROOT/Kadr.app
 cp "$DOCS/Как установить.txt" $ROOT/
-STAGE=$B/stage/Субтитры
+STAGE=$B/stage/Kadr
 rm -rf $B/stage && mkdir -p $STAGE
-ditto $APP $STAGE/Субтитры.app
+ditto $APP $STAGE/Kadr.app
 cp "$DOCS/Как установить.txt" "$DOCS/Как пользоваться.txt" $STAGE/
-rm -f $ROOT/Субтитры.zip
-ditto -c -k --norsrc --noextattr --keepParent $STAGE $ROOT/Субтитры.zip
-du -sh $ROOT/Субтитры.app $ROOT/Субтитры.zip
+rm -f $ROOT/Kadr.zip
+ditto -c -k --norsrc --noextattr --keepParent $STAGE $ROOT/Kadr.zip
+du -sh $ROOT/Kadr.app $ROOT/Kadr.zip
