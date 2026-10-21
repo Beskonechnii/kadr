@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Выпуск версии: tools/release.sh [patch|minor|major]  (по умолчанию patch)
+# Выпуск версии: tools/release.sh [patch|minor|major|X.Y.Z]  (по умолчанию patch)
 # поднимает версию → CHANGELOG «Не выпущено» → номер версии → коммит + тег → сборка .app → push + GitHub Release
 set -euo pipefail
 ROOT=${0:A:h:h}
@@ -16,7 +16,8 @@ case $part in
   major) new=$((MA+1)).0.0 ;;
   minor) new=$MA.$((MI+1)).0 ;;
   patch) new=$MA.$MI.$((PA+1)) ;;
-  *) echo "patch | minor | major" >&2; exit 1 ;;
+  <->.<->.<->) new=$part ;;   # точный номер — например, при переходе на 0.x
+  *) echo "patch | minor | major | X.Y.Z" >&2; exit 1 ;;
 esac
 
 sed -i '' "s/^__version__ = \".*\"/__version__ = \"$new\"/" app/__init__.py
