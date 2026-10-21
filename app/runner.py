@@ -162,6 +162,7 @@ async def process(src: Path, out_dir: Path, user_context: str, hint: str | None,
             res = Result([], r.cues, r.extra["timings"])
             if r.is_video:
                 proj = project.build(r.ru_cues, r.en_cues, await media.probe(src), r.speech)
+                proj["context"] = user_context   # для перевода одной реплики из редактора
             if burn and r.is_video:
                 t = time.monotonic()
                 await progress("🔥 Прожигаю EN-субтитры в видео…")

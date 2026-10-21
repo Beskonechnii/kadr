@@ -28,6 +28,10 @@ aside { background: var(--panel); overflow-y: auto; }
 .cue.on { border-color: var(--accent); background: #1f2633; }
 .cue .t { color: var(--dim); font-size: 11px; display: flex; gap: 6px; font-variant-numeric: tabular-nums; }
 .cue .warn { color: var(--warn); }
+.cue .acts { margin-left: auto; display: flex; gap: 2px; visibility: hidden; }
+.cue:hover .acts, .cue.on .acts { visibility: visible; }
+.cue .acts button { padding: 0 6px; font-size: 12px; line-height: 18px; background: none; border-color: transparent; color: var(--dim); }
+.cue .acts button:hover { color: var(--text); background: #2a2a2f; }
 .cue textarea { width: 100%; resize: none; border: 0; background: transparent; color: var(--text);
   font: 14px/1.35 -apple-system, sans-serif; padding: 2px 0; outline: none; overflow: hidden; }
 .cue textarea.ru { color: var(--dim); font-size: 12px; }
@@ -48,10 +52,16 @@ aside { background: var(--panel); overflow-y: auto; }
 #controls { height: 64px; display: flex; align-items: center; gap: 12px; padding: 0 16px; border-top: 1px solid var(--line); }
 #play { width: 40px; }
 #time { width: 64px; color: var(--dim); font-variant-numeric: tabular-nums; }
-#track { position: relative; flex: 1; height: 34px; background: #202024; border-radius: 6px; cursor: pointer; overflow: hidden; }
-#blocks .b { position: absolute; top: 5px; bottom: 5px; background: #2f4f7f; border-radius: 4px; border: 1px solid #4a72ad;
-  font-size: 10px; color: #cfe0ff; padding: 2px 4px; white-space: nowrap; overflow: hidden; }
+#track { position: relative; flex: 1; height: 40px; background: #202024; border-radius: 6px; cursor: pointer;
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+#lane { position: relative; height: 100%; min-width: 100%; }
+#speech i { position: absolute; bottom: 2px; height: 3px; background: #3f8f5f; border-radius: 2px; }
+#blocks .b { position: absolute; top: 4px; bottom: 8px; background: #2f4f7f; border-radius: 4px; border: 1px solid #4a72ad;
+  font-size: 10px; color: #cfe0ff; padding: 2px 6px; white-space: nowrap; overflow: hidden; }
 #blocks .b.on { background: var(--accent); color: #fff; }
+#blocks .e { position: absolute; top: 0; bottom: 0; width: 6px; cursor: ew-resize; }
+#blocks .e.l { left: 0; } #blocks .e.r { right: 0; }
+#blocks .b:hover .e { background: rgba(255, 255, 255, .25); }
 #head { position: absolute; top: 0; bottom: 0; width: 2px; background: #fff; pointer-events: none; }
 
 h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 18px 0 8px; }

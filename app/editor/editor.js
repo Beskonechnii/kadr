@@ -172,6 +172,7 @@ function closeInline(commit) {
     proj.cues[i].en = inline.value.trim()
     const ta = $('list').children[i]?.querySelector('.en')
     if (ta) { ta.value = proj.cues[i].en; grow(ta) }
+    label(i)
     changed()
   }
   drawBox()
@@ -211,19 +212,74 @@ function renderList() {
   proj.cues.forEach((c, i) => {
     const el = document.createElement('div')
     el.className = 'cue'
-    el.innerHTML = `<div class="t"><span>${fmtT(c.start)} – ${fmtT(c.end)}</span><span class="warn"></span></div>
+    el.innerHTML = `<div class="t"><span class="tm"></span><span class="warn"></span><span class="acts">
+      <button data-a="split" title="Разрезать по курсору в тексте или по позиции видео (⌘B)">✂︎</button>
+      <button data-a="merge" title="Склеить со следующей">⤓</button>
+      <button data-a="retr" title="Перевести заново по русскому тексту">↻</button></span></div>
       <textarea class="en" rows="1" spellcheck="true"></textarea><textarea class="ru" rows="1" spellcheck="false"></textarea>`
     const [en, ru] = el.querySelectorAll('textarea'), warn = el.querySelector('.warn')
+    el.querySelector('.tm').textContent = `${fmtT(c.start)} – ${fmtT(c.end)}`
+    el.querySelector('[data-a=merge]').hidden = i === proj.cues.length - 1
+    el.querySelector('.acts').onclick = e => {
+      const a = e.target.dataset.a
+      if (a === 'split') split(i); else if (a === 'merge') merge(i); else if (a === 'retr') retranslate(i, e.target)
+    }
+    en.onkeyup = en.onclick = () => { caret = { i, pos: en.selectionStart } }
     const check = () => { warn.textContent = cps(c) > 21 ? '⚡ быстро для чтения' : '' }
     en.value = c.en
     ru.value = c.ru || ''
-    en.oninput = () => { c.en = en.value; grow(en); check(); $('blocks').children[i] && ($('blocks').children[i].textContent = c.en); changed() }
+    en.oninput = () => { c.en = en.value; grow(en); check(); label(i); changed() }
     ru.oninput = () => { c.ru = ru.value; grow(ru); changed() }
     for (const ta of [en, ru]) ta.onfocus = () => select(i, true)
     el.onclick = e => { if (e.target === el || e.target.closest('.t')) select(i, true) }
     list.append(el)
     check()
   })
+  requestAnimationFrame(() => list.querySelectorAll('textarea').forEach(grow))
+}
+
+// ---------- разрезать / склеить / перевести заново ----------
+let caret = null   // где стоял курсор в английском тексте: по нему режем
+function split(i) {
+  const c = proj.cues[i], words = c.en.split(/\s+/).filter(Boolean)
+  if (words.length < 2) return status('Разрезать нечего: в реплике одно слово')
+  const starts = wordStarts(c, words)
+  let k
+  if (caret && caret.i === i) k = c.en.slice(0, caret.pos).split(/\s+/).filter(Boolean).length
+  else if (v.currentTime > c.start && v.currentTime < c.end) k = starts.filter(t => t < v.currentTime).length
+  else k = Math.round(words.length / 2)
+  k = Math.min(words.length - 1, Math.max(1, k))
+  const t = +starts[k].toFixed(2)
+  // русский делим там же по времени: по словам Whisper, если текст не правили, иначе — по доле реплики
+  const ru = (c.ru || '').split(/\s+/).filter(Boolean), rw = c.words || []
+  let kr = rw.length === ru.length ? rw.filter(w => w[0] < t).length : Math.round(ru.length * (t - c.start) / (c.end - c.start))
+  kr = ru.length > 1 ? Math.min(ru.length - 1, Math.max(1, kr)) : ru.length
+  proj.cues.splice(i, 1,
+    { ...c, end: t, en: words.slice(0, k).join(' '), ru: ru.slice(0, kr).join(' '), words: rw.filter(w => w[0] < t) },
+    { ...c, start: t, en: words.slice(k).join(' '), ru: ru.slice(kr).join(' '), words: rw.filter(w => w[0] >= t) })
+  caret = null
+  rerender(i)
+}
+function merge(i) {
+  const [a, b] = proj.cues.slice(i, i + 2)
+  if (!b) return
+  const join = (x, y) => [x, y].filter(Boolean).join(' ')
+  proj.cues.splice(i, 2, { ...a, end: b.end, en: join(a.en, b.en), ru: join(a.ru, b.ru), words: [...(a.words || []), ...(b.words || [])] })
+  rerender(i)
+}
+function rerender(i) { renderList(); renderTrack(); active = -1; select(i, false); changed() }
+async function retranslate(i, btn) {
+  btn.disabled = true
+  status('Перевожу реплику…')
+  try {
+    const en = await call('retranslate', { i, proj })
+    proj.cues[i].en = en
+    const ta = $('list').children[i]?.querySelector('.en')
+    if (ta) { ta.value = en; grow(ta) }
+    label(i)
+    changed()
+  } catch (e) { status('Не перевелось: ' + (e.message || e)) }
+  btn.disabled = false
 }
 // высоту полей считаем, когда у списка уже есть ширина — и заново при каждом её изменении
 new ResizeObserver(() => $('list').querySelectorAll('textarea').forEach(grow)).observe($('list'))
@@ -239,22 +295,68 @@ function mark() {
 }
 
 // ---------- дорожка ----------
+let zoom = 1, edge = null
+const pct = t => t / duration() * 100 + '%'
+const place = (el, c) => { el.style.left = pct(c.start); el.style.width = pct(c.end - c.start) }
+const label = i => { const b = $('blocks').children[i]; if (b) b.querySelector('span').textContent = proj.cues[i].en }
 function renderTrack() {
-  const d = duration()
-  $('blocks').innerHTML = proj.cues.map(c =>
-    `<div class="b" style="left:${c.start / d * 100}%;width:${(c.end - c.start) / d * 100}%"></div>`).join('')
-  ;[...$('blocks').children].forEach((el, i) => { el.textContent = proj.cues[i].en })
+  $('speech').innerHTML = (proj.speech || []).map(([a, b]) => `<i style="left:${pct(a)};width:${pct(b - a)}"></i>`).join('')
+  $('blocks').innerHTML = proj.cues.map(() => '<div class="b"><i class="e l"></i><span></span><i class="e r"></i></div>').join('')
+  ;[...$('blocks').children].forEach((el, i) => { place(el, proj.cues[i]); label(i) })
+  mark()
 }
+const timeAt = x => { const r = $('lane').getBoundingClientRect(); return Math.min(duration(), Math.max(0, (x - r.left) / r.width * duration())) }
 $('track').addEventListener('pointerdown', e => {
-  const r = $('track').getBoundingClientRect()
-  v.currentTime = (e.clientX - r.left) / r.width * duration()
+  const b = e.target.closest('.b'), i = b ? [...$('blocks').children].indexOf(b) : -1
+  if (e.target.classList.contains('e')) {
+    // край реплики: тянем, не залезая на соседние; видео встаёт на край — видно, где начинается фраза
+    const side = e.target.classList.contains('l') ? 'start' : 'end'
+    edge = { i, side, t0: proj.cues[i][side], x0: timeAt(e.clientX), cx: e.clientX }   // сдвиг от точки захвата: край не прыгает под курсор
+    $('track').setPointerCapture(e.pointerId)
+    v.pause()
+    select(i, false)
+  } else {
+    v.currentTime = timeAt(e.clientX)
+    if (i >= 0) select(i, false)
+  }
 })
+$('track').addEventListener('pointermove', e => {
+  if (!edge || !edge.moved && Math.abs(e.clientX - edge.cx) < 3) return   // клик по краю — ещё не перетаскивание
+  edge.moved = true
+  const c = proj.cues[edge.i], prev = proj.cues[edge.i - 1], next = proj.cues[edge.i + 1]
+  let t = edge.t0 + timeAt(e.clientX) - edge.x0
+  // липнем к ближайшему началу или концу голоса, если он ближе 6 px
+  const px = duration() / $('lane').clientWidth * 6
+  const near = (proj.speech || []).flat().reduce((m, s) => Math.abs(s - t) < Math.abs(m - t) ? s : m, Infinity)
+  if (Math.abs(near - t) < px) t = near
+  t = edge.side === 'start' ? Math.min(Math.max(t, prev ? prev.end : 0), c.end - 0.2)
+                            : Math.max(Math.min(t, next ? next.start : duration()), c.start + 0.2)
+  c[edge.side] = +t.toFixed(2)
+  place($('blocks').children[edge.i], c)
+  $('list').children[edge.i].querySelector('.tm').textContent = `${fmtT(c.start)} – ${fmtT(c.end)}`
+  v.currentTime = t
+  changed()
+})
+$('track').addEventListener('pointerup', () => { edge = null })
+// колёсико — масштаб вокруг курсора, тачпад вбок — прокрутка
+$('track').addEventListener('wheel', e => {
+  if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return
+  e.preventDefault()
+  const tr = $('track'), t = timeAt(e.clientX), x = e.clientX - tr.getBoundingClientRect().left
+  zoom = Math.min(40, Math.max(1, zoom * Math.exp(-e.deltaY / 300)))
+  $('lane').style.width = zoom * 100 + '%'
+  tr.scrollLeft = t / duration() * $('lane').clientWidth - x
+}, { passive: false })
 v.addEventListener('loadedmetadata', renderTrack)
 
 function tick() {
   const t = v.currentTime || 0
   $('time').textContent = fmtT(t)
-  $('head').style.left = t / duration() * 100 + '%'
+  $('head').style.left = pct(t)
+  if (!v.paused && zoom > 1) {   // при воспроизведении дорожка едет за курсором
+    const tr = $('track'), x = t / duration() * $('lane').clientWidth
+    if (x < tr.scrollLeft || x > tr.scrollLeft + tr.clientWidth) tr.scrollLeft = x - 40
+  }
   const a = proj.cues.findIndex(c => t >= c.start && t < c.end)
   if (a !== active) {
     active = a
@@ -338,6 +440,11 @@ $('reveal').onclick = () => call('reveal')
 
 addEventListener('keydown', e => {
   if (e.metaKey && e.key === 's') { e.preventDefault(); save() }
+  else if (e.metaKey && e.key === 'b') {
+    e.preventDefault()
+    const i = caret && document.activeElement.classList.contains('en') ? caret.i : active >= 0 ? active : sel
+    if (i >= 0) split(i)
+  }
   else if (e.key === ' ' && !/TEXTAREA|INPUT|SELECT/.test(document.activeElement.tagName)) { e.preventDefault(); togglePlay() }
 })
 

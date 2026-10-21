@@ -19,6 +19,7 @@ from PyObjCTools import AppHelper
 from WebKit import WKContentWorld, WKUserScript, WKWebView, WKWebViewConfiguration
 
 from . import media, project, style
+from .srt_utils import Cue
 
 log = logging.getLogger(__name__)
 
@@ -88,6 +89,7 @@ class Scheme(NSObject, protocols=[objc.protocolNamed("WKURLSchemeHandler")]):
 
 class Session:
     """Открытый проект и команды страницы: cmd_<имя>(**данные) → ответ, который уйдёт в JS как JSON."""
+    SLOW = {"retranslate"}   # ждут модель или сеть — в отдельном потоке, окно не замирает
 
     def __init__(self, pj: Path):
         self.pj = pj
@@ -129,6 +131,14 @@ class Session:
     def cmd_set_default(self, fmt, preset):
         style.save_user(default=(fmt, preset))
         return style.defaults()
+
+    def cmd_retranslate(self, i, proj=None):
+        """Перевод одной реплики заново — после правки русского текста или разрезания."""
+        from .translate import translate_one
+
+        self._take(proj)
+        cues = [Cue(n + 1, c["start"], c["end"], c.get("ru") or c["en"]) for n, c in enumerate(self.proj["cues"])]
+        return asyncio.run(translate_one(cues, i, self.proj.get("context", "")))
 
     def cmd_reveal(self):
         f = self.pj.parent / (self.proj["files"].get("burned") or "")
@@ -180,12 +190,21 @@ class Bridge(NSObject, protocols=[objc.protocolNamed("WKScriptMessageHandler"),
         log.info("[editor] %s", msg.body())
 
     def userContentController_didReceiveScriptMessage_replyHandler_(self, ctl, msg, reply):
-        try:
-            data = json.loads(str(msg.body()))
-            reply(json.dumps(getattr(self.session, "cmd_" + data.pop("cmd"))(**data), ensure_ascii=False), None)
-        except Exception as e:
-            log.exception("Редактор: ошибка команды")
-            reply(None, str(e))
+        data = json.loads(str(msg.body()))
+        cmd = data.pop("cmd")
+
+        def run():
+            try:
+                out = json.dumps(getattr(self.session, "cmd_" + cmd)(**data), ensure_ascii=False)
+            except Exception as e:
+                log.exception("Редактор: ошибка команды %s", cmd)
+                out, err = None, str(e)[:300]
+            else:
+                err = None
+            # ответ — только с главного потока: это блок WebKit
+            AppHelper.callAfter(reply, out, err) if cmd in Session.SLOW else reply(out, err)
+
+        threading.Thread(target=run, daemon=True).start() if cmd in Session.SLOW else run()
 
 
 _open = []   # WKWebView держит обработчики слабо, а NSWindow не даёт повесить на себя атрибут

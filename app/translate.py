@@ -162,3 +162,16 @@ async def translate_cues(cues: list[Cue], user_context: str = "",
     for n, c in enumerate(out, 1):
         c.idx = n
     return out
+
+
+async def translate_one(cues: list[Cue], i: int, user_context: str = "") -> str:
+    """Перевести заново одну реплику из редактора; предыдущие — контекстом, как при переводе целиком."""
+    prev = cues[max(0, i - OVERLAP):i]
+    if config.TRANSLATOR == "local":
+        from .translate_local import _translate_chunk as local
+        from .transcribe import _mlx_thread
+
+        got = await asyncio.wrap_future(_mlx_thread.submit(local, [cues[i]], prev, user_context))
+    else:
+        got = await _translate_chunk(_client(), [cues[i]], prev, user_context)
+    return got.get(cues[i].idx, cues[i].text)
