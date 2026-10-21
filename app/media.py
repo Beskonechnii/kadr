@@ -85,23 +85,21 @@ async def has_encoder(name: str) -> bool:
     return any(line.split()[1:2] == [name] for line in out.splitlines())
 
 
-async def burn_subs(video: Path, srt: Path, dst: Path) -> Path:
-    """MP4 с субтитрами, вшитыми в картинку. На Mac кодирует аппаратно через VideoToolbox."""
+async def burn_subs(video: Path, ass: Path, dst: Path) -> Path:
+    """MP4 с субтитрами, вшитыми в картинку. На Mac кодирует аппаратно через VideoToolbox.
+    ASS собран из пресета (app/style.py), шрифты — свои из fontsdir: тот же рендер, что в превью редактора."""
     if not await has_filter("subtitles"):
         raise RuntimeError(f"{config.ffmpeg()} собран без libass — прожиг невозможен (нужен ffmpeg-full)")
-    style = config.BURN_STYLE
-    v = next((x for x in (await probe(video))["streams"] if x.get("codec_type") == "video"), {})
-    if v.get("height", 0) > v.get("width", 1):
-        # вертикальное (телефон): шрифт считается от высоты кадра — на узком экране он огромный;
-        # плюс поднимаем над нижней панелью Reels/TikTok. Поздние ключи force_style перекрывают ранние
-        style += "," + config.BURN_STYLE_VERTICAL
-    vf = f"subtitles='{_escape_filter_path(srt)}':force_style='{style}'"
+    from .style import FONTS_DIR
+
+    vf = f"subtitles='{_escape_filter_path(ass)}':fontsdir='{_escape_filter_path(FONTS_DIR)}'"
     x264 = ["-c:v", "libx264", "-preset", config.BURN_PRESET, "-crf", config.BURN_CRF]
     vt = ["-c:v", "h264_videotoolbox", "-q:v", "65"]
     for codec in ([vt, x264] if await has_encoder("h264_videotoolbox") else [x264]):
         try:
             await _run(
-                config.ffmpeg(), "-y", "-i", str(video), "-vf", vf, *codec,
+                # только картинка и звук: у копии с дорожками субтитров их не нужно тащить в прожиг
+                config.ffmpeg(), "-y", "-i", str(video), "-map", "0:v:0", "-map", "0:a:0?", "-vf", vf, *codec,
                 "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k",
                 "-movflags", "+faststart", str(dst),
             )

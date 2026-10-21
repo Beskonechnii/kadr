@@ -22,7 +22,7 @@ from AppKit import (NSAlert, NSApplication, NSBezierPath, NSBox, NSButton, NSCol
 from Foundation import NSURL, NSAttributedString, NSInsetRect, NSObject, NSTimer
 from PyObjCTools import AppHelper
 
-from . import __version__, config, runner, transcribe, translate_local, watch
+from . import __version__, config, project, runner, transcribe, translate_local, watch
 from .transcribe import get_model, release
 
 log = logging.getLogger("kadr")
@@ -265,9 +265,13 @@ class AppDelegate(NSObject):
             self.askKey_(None)
 
     def application_openFiles_(self, app, filenames):
-        """Файлы, брошенные на иконку в Dock/Finder или открытые через Quick Action (open -b)."""
-        for f in filenames:
-            watch.enqueue(Path(f), anywhere=True)
+        """Файлы, брошенные на иконку в Dock/Finder или открытые через Quick Action (open -b).
+        Файл проекта или папка project-n — в редактор."""
+        for f in map(Path, filenames):
+            if f.is_dir() or f.name.endswith(project.FILE):
+                self.open_editor(f)
+            else:
+                watch.enqueue(f, anywhere=True)
 
     def applicationShouldHandleReopen_hasVisibleWindows_(self, app, visible):
         self.window.makeKeyAndOrderFront_(None)   # клик по значку в Dock возвращает окно
@@ -294,7 +298,10 @@ class AppDelegate(NSObject):
         self.progress.setStyle_(0)   # полоска
         self.progress.setMinValue_(0)
         self.progress.setMaxValue_(100)
-        self.result = label("", NSMakeRect(20, 168, W - 190, 20), color=NSColor.secondaryLabelColor())
+        self.result = label("", NSMakeRect(20, 168, W - 300, 20), color=NSColor.secondaryLabelColor())
+        self.edit = NSButton.buttonWithTitle_target_action_("Редактор", self, "editLast:")
+        self.edit.setFrame_(NSMakeRect(W - 280, 160, 106, 32))
+        self.edit.setHidden_(True)
         self.reveal = NSButton.buttonWithTitle_target_action_("Показать в Finder", self, "revealLast:")
         self.reveal.setFrame_(NSMakeRect(W - 170, 160, 150, 32))
         self.reveal.setHidden_(True)
@@ -329,7 +336,7 @@ class AppDelegate(NSObject):
         self._cpu = (time.monotonic(), usage()[1])
 
         gray = NSColor.secondaryLabelColor()
-        for x in (self.state, self.progress, self.result, self.reveal, sep,
+        for x in (self.state, self.progress, self.result, self.edit, self.reveal, sep,
                   label("Перевод:", NSMakeRect(20, 101, 70, 18), color=gray), self.translator, self.burn,
                   label("Нагрузка:", NSMakeRect(20, 67, 70, 18), color=gray), self.effort,
                   label("Сейчас:", NSMakeRect(20, 33, 70, 18), color=gray), self.meter, self.load,
@@ -360,6 +367,8 @@ class AppDelegate(NSObject):
         if last:
             self.result.setStringValue_(f"Готово: {last.name}")
             self.reveal.setHidden_(False)
+            # старые проекты (до 1.2) без project.json тоже открываются — по SRT
+            self.edit.setHidden_(not (project.locate(last).exists() or any(last.glob("*en.srt"))))
 
     def show_load(self):
         now, (gb, cpu) = time.monotonic(), usage()
@@ -381,6 +390,31 @@ class AppDelegate(NSObject):
             return
         main = next(last.glob("video-*-en.mp4"), None) or next(last.glob("subs-*-en.srt"), None)
         subprocess.run(["open", "-R", str(main)] if main else ["open", str(last)])
+
+    def editLast_(self, sender):
+        if status["last"]:
+            self.open_editor(status["last"])
+
+    def openProject_(self, sender):
+        """Папка project-n или файл проекта — например, чтобы поправить старый результат."""
+        panel = NSOpenPanel.openPanel()
+        panel.setCanChooseDirectories_(True)
+        panel.setAllowedFileTypes_(["json"])
+        panel.setDirectoryURL_(NSURL.fileURLWithPath_(str(config.DONE)))
+        if panel.runModal() == 1:
+            self.open_editor(Path(panel.URL().path()))
+
+    def open_editor(self, target: Path):
+        from .editor import open_editor
+
+        try:
+            open_editor(target)
+        except Exception as e:
+            log.exception("Не открылся редактор")
+            a = NSAlert.alloc().init()
+            a.setMessageText_("Не получилось открыть редактор")
+            a.setInformativeText_(str(e))
+            a.runModal()
 
     def setTranslator_(self, sender):
         k = list(TRANSLATORS)[sender.indexOfSelectedItem()]
@@ -432,6 +466,7 @@ class AppDelegate(NSObject):
         self.login_item.setState_(int(self.login_enabled()))
         file_menu = menu("Файл", [
             ("Выбрать видео…", "pickFiles:", "o"),
+            ("Открыть в редакторе…", "openProject:", "e"),
             ("Открыть «Входящие»", "openInbox:", ""),
             ("Открыть «Готово»", "openDone:", ""),
             None,

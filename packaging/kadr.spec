@@ -15,13 +15,14 @@ for pkg in ("mlx", "mlx_lm", "hf_xet"):
     d, b, h = collect_all(pkg)
     datas += d; binaries += b; hidden += h
 binaries += [(str(FF / "ffmpeg"), "bin"), (str(FF / "ffprobe"), "bin")]
+datas += [(str(HERE.parent / "app/editor"), "app/editor")]   # страница редактора, jassub, шрифты
 
 a = Analysis(
     [str(HERE / "entry.py")],
     pathex=[str(HERE.parent)],
     binaries=binaries,
     datas=datas,
-    hiddenimports=hidden + ["keyring.backends.macOS", "UserNotifications", "ServiceManagement",
+    hiddenimports=hidden + ["keyring.backends.macOS", "UserNotifications", "ServiceManagement", "WebKit",
                             "mlx_whisper.transcribe"],
     excludes=["torch", "tkinter", "matplotlib", "IPython", "dotenv", "faster_whisper",
               "tensorflow", "jax", "flax"],

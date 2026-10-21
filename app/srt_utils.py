@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 import textwrap
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 MAX_CUE_DURATION = 6.0     # сек, максимум на одну реплику
@@ -14,18 +14,19 @@ LINE_WIDTH = 42
 
 
 @dataclass
-class Cue:
-    idx: int
+class Word:
     start: float
     end: float
     text: str
 
 
 @dataclass
-class Word:
+class Cue:
+    idx: int
     start: float
     end: float
     text: str
+    words: list[Word] = field(default_factory=list)   # тайминги слов от Whisper — для подсветки и правки
 
 
 def fmt_ts(t: float) -> str:
@@ -75,7 +76,8 @@ def words_to_cues(words: list[Word]) -> list[Cue]:
             return
         text = " ".join(w.text.strip() for w in buf).strip()
         if text:
-            cues.append(Cue(len(cues) + 1, buf[0].start, buf[-1].end, text))
+            cues.append(Cue(len(cues) + 1, buf[0].start, buf[-1].end, text,
+                            [Word(w.start, w.end, w.text.strip()) for w in buf]))
         buf.clear()
 
     for w in words:

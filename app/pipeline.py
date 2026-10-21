@@ -25,6 +25,8 @@ class JobResult:
     subs_video: Path | None = None
     is_video: bool = False
     cues: int = 0
+    ru_cues: list = field(default_factory=list)
+    en_cues: list = field(default_factory=list)
     extra: dict = field(default_factory=dict)
 
 
@@ -75,7 +77,7 @@ async def run(job_dir: Path, src: Path, user_context: str, progress: Progress,
     lap("translate")
 
     result = JobResult(ru_srt=ru_srt, en_srt=en_srt, is_video=is_video, cues=len(en_cues),
-                       extra={"timings": timings})
+                       ru_cues=ru_cues, en_cues=en_cues, extra={"timings": timings})
     if is_video:
         await progress("🎬 Собираю видео с дорожками субтитров…")
         try:

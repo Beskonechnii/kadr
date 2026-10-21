@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from . import config, media, pipeline
+from . import config, media, pipeline, project
 from .srt_utils import read_srt, write_srt
 from .translate import translate_cues
 
@@ -145,6 +145,7 @@ async def process(src: Path, out_dir: Path, user_context: str, hint: str | None,
 
     out_dir.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix=f"{name}.", dir=config.WORK_TMP))
+    proj = None   # проект — только для видео
     try:
         if src.suffix.lower() == ".srt":
             cues = read_srt(src)
@@ -159,15 +160,26 @@ async def process(src: Path, out_dir: Path, user_context: str, hint: str | None,
         else:
             r = await pipeline.run(work, src, user_context, progress, hint)
             res = Result([], r.cues, r.extra["timings"])
+            if r.is_video:
+                proj = project.build(r.ru_cues, r.en_cues, await media.probe(src))
             if burn and r.is_video:
                 t = time.monotonic()
                 await progress("🔥 Прожигаю EN-субтитры в видео…")
-                await media.burn_subs(src, r.en_srt, work / f"{name}.en.mp4")
+                ass = work / f"{name}.en.ass"
+                ass.write_text(project.ass(proj), encoding="utf-8")
+                await media.burn_subs(src, ass, work / f"{name}.en.mp4")
+                ass.unlink()
                 res.timings["burn"] = round(time.monotonic() - t, 1)
+        rename = (lambda f: output_name(f, name, number)) if number else (lambda f: f)
         for f in sorted(work.iterdir()):
-            dst = out_dir / (output_name(f.name, name, number) if number else f.name)
+            dst = out_dir / rename(f.name)
             shutil.move(f, dst)
             res.files.append(dst)
+        if proj:
+            soft = next((rename(f"{name}.subs{e}") for e in (".mp4", ".mkv") if (out_dir / rename(f"{name}.subs{e}")).exists()), None)
+            proj["files"] = {"soft": soft, "source": str(src.resolve()), "burned": rename(f"{name}.en.mp4"),
+                             "en_srt": rename(f"{name}.en.srt"), "ru_srt": rename(f"{name}.ru.srt")}
+            project.save(out_dir / (project.FILE if number else f"{name}.{project.FILE}"), proj)
         await progress(f"✅ Готово: {res.cues} реплик, этапы (сек): {res.timings}")
         return res
     finally:

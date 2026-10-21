@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Редактор</title>
+<link rel="stylesheet" href="editor.css">
+</head>
+<body>
+<header>
+  <b id="title"></b>
+  <span id="fmt" class="chip"></span>
+  <span id="status"></span>
+  <span class="grow"></span>
+  <button id="reveal">Показать в Finder</button>
+  <button id="rebuild" class="primary">Пересобрать видео</button>
+</header>
+<main>
+  <aside id="list"></aside>
+  <section id="center">
+    <div id="area">
+      <div id="stage">
+        <video id="v" playsinline preload="auto"></video>
+        <div id="grid"></div>
+        <div id="box" hidden></div>
+        <textarea id="inline" hidden spellcheck="false"></textarea>
+      </div>
+      <div id="novideo" hidden>Видео для превью не найдено: редактировать текст и стиль можно, превью — нет.</div>
+    </div>
+    <div id="controls">
+      <button id="play" title="Пробел">▶︎</button>
+      <span id="time">0:00.0</span>
+      <div id="track"><div id="blocks"></div><div id="head"></div></div>
+    </div>
+  </section>
+  <aside id="panel">
+    <h3>Пресеты</h3>
+    <div id="presets"></div>
+    <button id="makedefault" class="wide"></button>
+    <button id="savepreset" class="wide">Сохранить как пресет…</button>
+
+    <h3>Текст</h3>
+    <label>Шрифт <select data-k="font" id="font"></select></label>
+    <label>Размер <input type="range" data-k="size" min="2" max="14" step="0.1"><output></output></label>
+    <div class="row">
+      <label>Цвет <input type="color" data-k="color"></label>
+      <label class="row"><input type="checkbox" data-k="upper"> КАПС</label>
+    </div>
+    <label>Слов на экране <input type="range" data-k="words" min="0" max="8" step="1"><output></output></label>
+
+    <h3>Обводка и фон</h3>
+    <div class="row">
+      <label>Обводка <input type="range" data-k="outline" min="0" max="25" step="0.5"><output></output></label>
+      <input type="color" data-k="outline_color">
+    </div>
+    <label>Тень <input type="range" data-k="shadow" min="0" max="20" step="0.5"><output></output></label>
+    <div class="row">
+      <label class="row"><input type="checkbox" data-k="box"> Плашка</label>
+      <input type="color" data-k="box_color">
+    </div>
+    <label>Прозрачность плашки <input type="range" data-k="box_opacity" min="10" max="100" step="5"><output></output></label>
+
+    <h3>Подсветка</h3>
+    <div class="row">
+      <label class="row"><input type="checkbox" id="hl-on"> Текущее слово</label>
+      <input type="color" id="hl-color">
+    </div>
+    <label class="row"><input type="checkbox" data-k="karaoke"> Караоке — заливка по мере речи</label>
+    <label class="row"><input type="checkbox" data-k="bilingual"> Русский под английским</label>
+
+    <h3>Положение</h3>
+    <label>По горизонтали <input type="range" data-k="x" min="5" max="95" step="0.5"><output></output></label>
+    <label>По вертикали <input type="range" data-k="y" min="5" max="99" step="0.5"><output></output></label>
+    <label>Сетка <select id="gridsel"></select></label>
+    <p class="hint">Перетащите субтитр на видео, двойной клик — правка текста.</p>
+  </aside>
+</main>
+<dialog id="namedlg">
+  <form method="dialog">
+    <p>Название пресета</p>
+    <input id="pname" required>
+    <menu><button value="cancel" formnovalidate>Отмена</button><button value="ok" class="primary">Сохранить</button></menu>
+  </form>
+</dialog>
+<script type="module" src="editor.js"></script>
+</body>
+</html>

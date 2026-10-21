@@ -134,12 +134,6 @@ WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
 WHISPER_THREADS = int(os.getenv("WHISPER_THREADS", "0"))
 
 BURN = os.getenv("BURN", "1").strip() == "1"   # .en.mp4 с субтитрами в кадре — главный результат
-BURN_STYLE = os.getenv(
-    "BURN_STYLE",
-    "FontName=Helvetica,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
-    "BorderStyle=1,Outline=1.5,Shadow=0,MarginV=28",
-)
-BURN_STYLE_VERTICAL = os.getenv("BURN_STYLE_VERTICAL", "FontSize=11,MarginV=70")
 BURN_CRF = os.getenv("BURN_CRF", "20")
 BURN_PRESET = os.getenv("BURN_PRESET", "veryfast")
 
