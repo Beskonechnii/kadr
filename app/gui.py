@@ -19,10 +19,10 @@ from AppKit import (NSAlert, NSApplication, NSBezierPath, NSBox, NSButton, NSCol
                     NSMenu, NSMenuItem, NSOpenPanel, NSPasteboardTypeFileURL,
                     NSPasteboardURLReadingFileURLsOnlyKey, NSPopUpButton, NSProgressIndicator,
                     NSSecureTextField, NSTextField, NSView, NSWindow)
-from Foundation import NSURL, NSAttributedString, NSInsetRect, NSObject, NSTimer
+from Foundation import NSURL, NSAttributedString, NSBundle, NSInsetRect, NSObject, NSTimer
 from PyObjCTools import AppHelper
 
-from . import __version__, config, project, runner, transcribe, translate_local, watch
+from . import __version__, config, project, runner, transcribe, translate_local, update, watch
 from .transcribe import get_model, release
 
 log = logging.getLogger("kadr")
@@ -37,7 +37,7 @@ EFFORTS = {"eco": "Эконом — лёгкие модели, Mac не торм
            "max": "Максимум — модели всегда наготове"}
 PRESSURE = {1: "в норме", 2: "под нагрузкой", 4: "на пределе"}
 
-status = {"text": "Запускаюсь…", "busy": False, "last": None}
+status = {"text": "Запускаюсь…", "busy": False, "last": None, "update": "", "quit": False}
 
 
 class _Usage(ctypes.Structure):   # rusage_info_v0 из <libproc.h>
@@ -292,6 +292,11 @@ class AppDelegate(NSObject):
         v = self.window.contentView()
 
         v.addSubview_(DropView.alloc().initWithFrame_(NSMakeRect(20, 260, W - 40, 200)))
+        # появляется, когда в GitHub Releases есть версия новее; окно подрастает на строку
+        self.update_btn = NSButton.buttonWithTitle_target_action_("", self, "installUpdate:")
+        self.update_btn.setFrame_(NSMakeRect(20, H + 6, W - 40, 28))
+        self.update_btn.setHidden_(True)
+        self.size = (W, H)
 
         self.state = label("", NSMakeRect(20, 226, W - 40, 20))
         self.progress = NSProgressIndicator.alloc().initWithFrame_(NSMakeRect(20, 208, W - 40, 12))
@@ -340,11 +345,14 @@ class AppDelegate(NSObject):
                   label("Перевод:", NSMakeRect(20, 101, 70, 18), color=gray), self.translator, self.burn,
                   label("Нагрузка:", NSMakeRect(20, 67, 70, 18), color=gray), self.effort,
                   label("Сейчас:", NSMakeRect(20, 33, 70, 18), color=gray), self.meter, self.load,
-                  self.models):
+                  self.models, self.update_btn):
             v.addSubview_(x)
         self.window.makeKeyAndOrderFront_(None)
 
     def tick_(self, timer):
+        self.show_update()
+        if status["quit"]:
+            NSApplication.sharedApplication().terminate_(None)
         text = status["text"]
         if text.startswith("Загружаю модель"):
             text = f"{text} {models_size_gb():.1f} GB (только при первом запуске)"
@@ -369,6 +377,46 @@ class AppDelegate(NSObject):
             self.reveal.setHidden_(False)
             # старые проекты (до 1.2) без project.json тоже открываются — по SRT
             self.edit.setHidden_(not (project.locate(last).exists() or any(last.glob("*en.srt"))))
+
+    def show_update(self):
+        if status["update"]:
+            self.update_btn.setTitle_(status["update"])
+        elif update.available and self.update_btn.isHidden():
+            self.update_btn.setTitle_(f"Доступна версия {update.available[0]} — обновить")
+            W, H = self.size
+            self.window.setContentSize_((W, H + 40))
+            self.update_btn.setHidden_(False)
+
+    def installUpdate_(self, sender):
+        self.update_btn.setEnabled_(False)
+        threading.Thread(target=self._install, daemon=True).start()
+
+    def _install(self):
+        ver, url = update.available
+        try:
+            status["update"] = f"Скачиваю {ver}… 0%"
+            app = update.download(url, lambda p: status.update(update=f"Скачиваю {ver}… {p}%"))
+            if config.FROZEN:
+                status["update"] = "Перезапускаюсь…"
+                update.swap_after_exit(app, Path(NSBundle.mainBundle().bundlePath()))
+                status["quit"] = True
+            else:   # dev-запуск: подменять нечего, просто показать скачанное
+                status["update"] = f"Скачано: {app}"
+                subprocess.run(["open", "-R", str(app)])
+        except Exception as e:
+            log.exception("Обновление не удалось")
+            status["update"] = f"Не удалось обновить: {str(e)[:60]}"
+            self.update_btn.setEnabled_(True)
+
+    def checkUpdates_(self, sender):
+        def run():
+            try:
+                update.available = update.check()
+                if not update.available:
+                    notify(f"У вас последняя версия, {__version__}")
+            except Exception as e:
+                notify(f"Не удалось проверить: {str(e)[:80]}")
+        threading.Thread(target=run, daemon=True).start()
 
     def show_load(self):
         now, (gb, cpu) = time.monotonic(), usage()
@@ -458,6 +506,7 @@ class AppDelegate(NSObject):
             ("Добавить «Сделать субтитры» в Finder", "installQuickAction:", ""),
             ("Запускать при входе в систему", "toggleLogin:", ""),
             ("Журнал", "openLog:", ""),
+            ("Проверить обновления", "checkUpdates:", ""),
             None,
             ("Скрыть", "hide:", "h"),
             ("Выйти", "terminate:", "q"),
@@ -594,6 +643,7 @@ def main():
     delegate = AppDelegate.alloc().init()
     app.setDelegate_(delegate)
     threading.Thread(target=worker, daemon=True).start()
+    threading.Thread(target=update.watch_releases, daemon=True).start()
     AppHelper.installMachInterrupt()
     AppHelper.runEventLoop()
 

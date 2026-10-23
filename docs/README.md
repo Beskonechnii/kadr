@@ -96,6 +96,10 @@ packaging/build_app.sh          # → Kadr.app, Kadr.zip, «Как устано�
   без Homebrew. Python — python-build-standalone через uv, без torch.
 - Минимум — macOS 15.0 на Apple Silicon; `build_app.sh` падает, если какой-то бинарник требует новее.
 - Подпись ad-hoc: у получателя один раз «Всё равно открыть» в Конфиденциальность и безопасность.
+- Обновления (`app/update.py`): при запуске и раз в 6 часов спрашивает GitHub Releases; если версия новее —
+  в окне кнопка. Скачивает `Kadr.zip` в `DATA/update`, распаковывает `ditto`, отдельный `sh` ждёт выхода
+  приложения, подменяет `.app` по пути `NSBundle` и запускает заново. Скачанное Python'ом не получает карантин,
+  Gatekeeper не спрашивает. В dev только скачивает и показывает в Finder.
   С Apple Developer ID — `codesign --options runtime -s "Developer ID…"` + `notarytool` в конце сборки.
 - LGPL: при раздаче держи под рукой исходники ffmpeg/fribidi (URL и sha256 — в `build_ffmpeg.sh`).
 
