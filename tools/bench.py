@@ -200,7 +200,10 @@ async def main():
             print(f"🌍 {name}: перевожу ({config.TRANSLATOR})…", flush=True)
             row.update(await bench_tl(name, ref_ru, read_srt(en_path) if en_path.exists() else None, ctx))
             if a.judge:
-                row.update(await judge(ref_ru, row["en_cues"]))
+                try:
+                    row.update(await judge(ref_ru, row["en_cues"]))
+                except Exception as e:   # судья — надстройка: без него таблица всё равно нужна
+                    print(f"⚠️ Судья не сработал: {runner.human_error(e)}", flush=True)
         results.append(row)
 
     cols = ["name", "wer%", "asr_s", "cues", "long%", "fast%", "short%", "chrf", "judge", "en_fast%", "tl_s"]
