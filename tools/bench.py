@@ -27,11 +27,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from app import config, media, runner  # noqa: E402
-from app.srt_utils import MAX_CUE_CHARS, Cue, read_srt  # noqa: E402
+from app.srt_utils import CPS_MAX, MAX_CUE_CHARS, Cue, read_srt  # noqa: E402
 
 TEST, OUT = ROOT / "test", ROOT / "test" / ".bench"
 MEDIA = (".mp4", ".mov", ".m4v", ".mkv", ".m4a", ".mp3", ".wav")
-CPS_MAX = 17   # знаков в секунду — быстрее не читается (как ⚡ в редакторе)
 
 
 # ---------- метрики ----------

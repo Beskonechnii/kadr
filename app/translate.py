@@ -7,7 +7,7 @@ import logging
 from anthropic import AsyncAnthropic
 
 from . import config
-from .srt_utils import Cue
+from .srt_utils import Cue, prompt_line
 
 log = logging.getLogger(__name__)
 
@@ -45,8 +45,10 @@ Rules:
 - Translate each cue into natural, idiomatic spoken English, the way a native speaker would actually say it. Avoid word-for-word calques.
 - Keep exactly one output item per input id. Never merge, split, drop or reorder cues, even if a sentence continues across cues: translate each part so the pieces read naturally in sequence.
 - Subtitles must be readable: keep each cue about as long as the Russian or shorter (aim for ≤ 84 characters). Drop filler words (ну, вот, как бы, типа, это самое) unless they carry meaning.
+- A cue marked "[max N chars]" is on screen too briefly: its English must fit in N characters — rephrase shorter, drop what is non-essential.
 - Preserve tone and register: slang stays casual, profanity stays profanity (equivalent strength), formal speech stays formal.
 - Names: transliterate properly (e.g. Сергей → Sergey). Keep brand names in their usual English form.
+- Colloquial place names and nicknames become the standard English name: Питер → St. Petersburg, Мск → Moscow, Подмосковье → the Moscow region, Нижний → Nizhny Novgorod.
 - The text comes from speech recognition and may contain errors; infer the intended meaning from context.
 - If a cue is pure noise or unintelligible, return an empty string for it.
 - Output only via the submit_translation tool."""
@@ -87,7 +89,7 @@ async def _translate_chunk(client: AsyncAnthropic, chunk: list[Cue], prev: list[
                      "\n".join(f"{c.idx}: {c.text}" for c in prev) +
                      "\n</previous_cues_for_context_only>")
     parts.append("<cues_to_translate>\n" +
-                 "\n".join(f"{c.idx}: {c.text}" for c in chunk) +
+                 "\n".join(prompt_line(c) for c in chunk) +
                  "\n</cues_to_translate>")
     parts.append(f"Translate all {len(chunk)} cues (ids {chunk[0].idx}–{chunk[-1].idx}).")
 
@@ -117,7 +119,7 @@ async def _translate_chunk(client: AsyncAnthropic, chunk: list[Cue], prev: list[
             return result
         log.warning("Не хватает %d реплик (попытка %d), повторяю", len(missing), attempt + 1)
         chunk = [c for c in chunk if c.idx in missing]
-        parts[-2] = ("<cues_to_translate>\n" + "\n".join(f"{c.idx}: {c.text}" for c in chunk) +
+        parts[-2] = ("<cues_to_translate>\n" + "\n".join(prompt_line(c) for c in chunk) +
                      "\n</cues_to_translate>")
         parts[-1] = f"Translate all {len(chunk)} cues."
     # если так и не перевелось — оставим оригинал, чтобы не терять тайминг

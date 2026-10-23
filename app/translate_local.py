@@ -7,7 +7,7 @@ import re
 import threading
 
 from . import config
-from .srt_utils import Cue
+from .srt_utils import Cue, prompt_line
 from .transcribe import _mlx_thread, local_path  # общий поток: модели MLX привязаны к потоку, где созданы
 
 log = logging.getLogger(__name__)
@@ -21,8 +21,10 @@ Rules:
 - Natural, idiomatic spoken English, the way a native speaker would say it. No word-for-word calques.
 - Exactly one output line per input line, same number, format "N: translation". Never merge, split, skip or reorder lines, even if a sentence continues on the next line.
 - Keep each line about as long as the Russian or shorter. Drop filler words (ну, вот, как бы, типа) unless they carry meaning.
+- A line marked "[max N chars]" is on screen too briefly: its English must fit in N characters — say it shorter.
 - Keep tone: slang stays casual, profanity stays profanity, formal stays formal.
 - Names: proper English transliteration (Сергей → Sergey). Brands in their usual English form.
+- Colloquial place names become the standard English name: Питер → St. Petersburg, Подмосковье → the Moscow region.
 - The text comes from speech recognition and may contain errors; infer the intended meaning.
 - If a line is pure noise, output "N:" with nothing after it.
 - Output only the numbered lines, nothing else."""
@@ -106,7 +108,7 @@ def _translate_chunk(chunk: list[Cue], prev: list[Cue], context: str) -> dict[in
     result: dict[int, str] = {}
     todo = chunk
     for attempt in range(3):
-        body = "\n".join(f"{c.idx}: {c.text}" for c in todo)
+        body = "\n".join(prompt_line(c) for c in todo)
         prompt = "\n\n".join(head + [f"Translate these {len(todo)} lines:\n{body}"])
         out = _generate(prompt, max_tokens=80 * len(todo) + 200)
         result.update(_parse(out, {c.idx for c in todo}))

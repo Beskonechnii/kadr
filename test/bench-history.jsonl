@@ -1,2 +1,14 @@
 {"date": "2026-10-23", "rev": "85c3e49", "effort": "balance", "translator": "local", "peak_gb": 3.5, "name": "bench", "tl_s": 32.0, "en_fast%": 60}
 {"date": "2026-10-23", "rev": "85c3e49", "effort": "balance", "translator": "local", "peak_gb": 3.5, "name": "test", "wer%": 4.5, "asr_s": 8.9, "cues": 5, "long%": 0, "fast%": 0, "short%": 0, "tl_s": 9.0, "en_fast%": 20, "chrf": 76.9}
+{"date": "2026-10-23", "rev": "6ff2584", "effort": "balance", "translator": "local", "peak_gb": 0.8, "name": "bench", "tl_s": 74.1, "en_fast%": 60}
+{"date": "2026-10-23", "rev": "6ff2584", "effort": "balance", "translator": "local", "peak_gb": 0.8, "name": "test", "tl_s": 6.7, "en_fast%": 20, "chrf": 76.9}
+{"date": "2026-10-23", "rev": "6ff2584", "effort": "balance", "translator": "local", "peak_gb": 2.5, "name": "bench", "tl_s": 24.8, "en_fast%": 60, "judge": 4.53}
+{"date": "2026-10-23", "rev": "6ff2584", "effort": "balance", "translator": "local", "peak_gb": 2.5, "name": "test", "tl_s": 5.7, "en_fast%": 20, "chrf": 76.9, "judge": 3.8}
+{"date": "2026-10-23", "rev": "6ff2584", "effort": "balance", "translator": "claude", "peak_gb": 0.1, "name": "bench", "tl_s": 12.0, "en_fast%": 57, "judge": 4.53}
+{"date": "2026-10-23", "rev": "6ff2584", "effort": "balance", "translator": "claude", "peak_gb": 0.1, "name": "test", "tl_s": 10.7, "en_fast%": 60, "chrf": 76.2, "judge": 4.4}
+{"date": "2026-10-23", "rev": "6ff2584", "effort": "balance", "translator": "local", "peak_gb": 2.3, "name": "bench", "tl_s": 26.3, "en_fast%": 50, "judge": 4.47}
+{"date": "2026-10-23", "rev": "6ff2584", "effort": "balance", "translator": "local", "peak_gb": 2.3, "name": "test", "tl_s": 6.6, "en_fast%": 20, "chrf": 92.3, "judge": 3.8}
+{"date": "2026-10-23", "rev": "6ff2584", "effort": "balance", "translator": "claude", "peak_gb": 0.1, "name": "bench", "tl_s": 31.4, "en_fast%": 17, "judge": 4.67}
+{"date": "2026-10-23", "rev": "6ff2584", "effort": "balance", "translator": "claude", "peak_gb": 0.1, "name": "test", "tl_s": 9.8, "en_fast%": 60, "chrf": 75.3, "judge": 4.2}
+{"date": "2026-10-23", "rev": "6ff2584", "effort": "balance", "translator": "local", "peak_gb": 2.0, "name": "bench", "tl_s": 26.1, "en_fast%": 57}
+{"date": "2026-10-23", "rev": "6ff2584", "effort": "balance", "translator": "local", "peak_gb": 3.7, "name": "bench", "tl_s": 26.6, "en_fast%": 57, "judge": 4.5}

@@ -11,6 +11,7 @@ MAX_CUE_CHARS = 84         # ~2 строки по 42 символа
 MIN_CUE_DURATION = 1.0     # короче — неудобно читать
 PAUSE_SPLIT = 0.6          # пауза между словами, после которой режем
 LINE_WIDTH = 42
+CPS_MAX = 17               # знаков в секунду — быстрее субтитр не прочитать (⚡ в редакторе)
 
 
 @dataclass
@@ -124,6 +125,13 @@ def apply_fixes(cues: list[Cue], fixes: dict[str, str]) -> list[Cue]:
         for c in cues:
             c.text = rx.sub(b, c.text)
     return cues
+
+
+def prompt_line(c: Cue) -> str:
+    """Строка реплики для переводчика. Если русский уже не успеть прочитать за время реплики,
+    добавляем бюджет знаков: иначе английский выходит длиннее и ещё быстрее."""
+    budget = max(int(CPS_MAX * (c.end - c.start)), 25)
+    return f"{c.idx} [max {budget} chars]: {c.text}" if len(c.text) > budget else f"{c.idx}: {c.text}"
 
 
 def write_srt(cues: list[Cue], path: Path) -> None:
