@@ -12,3 +12,6 @@
 {"date": "2026-10-23", "rev": "6ff2584", "effort": "balance", "translator": "claude", "peak_gb": 0.1, "name": "test", "tl_s": 9.8, "en_fast%": 60, "chrf": 75.3, "judge": 4.2}
 {"date": "2026-10-23", "rev": "6ff2584", "effort": "balance", "translator": "local", "peak_gb": 2.0, "name": "bench", "tl_s": 26.1, "en_fast%": 57}
 {"date": "2026-10-23", "rev": "6ff2584", "effort": "balance", "translator": "local", "peak_gb": 3.7, "name": "bench", "tl_s": 26.6, "en_fast%": 57, "judge": 4.5}
+{"date": "2026-10-23", "rev": "dfd5420", "effort": "balance", "translator": "local", "peak_gb": 1.4, "name": "bench", "tl_s": 34.9, "en_fast%": 57, "judge": 4.53}
+{"date": "2026-10-23", "rev": "dfd5420", "effort": "balance", "translator": "local", "peak_gb": 1.4, "name": "test", "tl_s": 6.4, "en_fast%": 0, "chrf": 78.5, "judge": 4.0}
+{"date": "2026-10-23", "rev": "dfd5420", "effort": "balance", "translator": "local", "peak_gb": 3.8, "name": "bench", "tl_s": 32.4, "en_fast%": 57, "judge": 4.6}
