@@ -27,7 +27,7 @@ aside { background: var(--panel); overflow-y: auto; }
 #listbar input:not([type=checkbox]) { flex: 1; min-width: 0; background: #2a2a2f; color: var(--text); border: 1px solid var(--line);
   border-radius: 6px; padding: 5px 8px; font: inherit; outline: none; }
 #listbar input:focus { border-color: var(--accent); }
-#listbar button { padding: 3px 10px; }
+#listbar button { padding: 3px 10px; white-space: nowrap; }
 #badn { color: var(--warn); }
 #listbar label { white-space: nowrap; }
 #panel { border-left: 1px solid var(--line); padding: 4px 14px 20px; }
@@ -78,6 +78,15 @@ aside { background: var(--panel); overflow-y: auto; }
 #blocks .e.l { left: 0; } #blocks .e.r { right: 0; }
 #blocks .b:hover .e { background: rgba(255, 255, 255, .25); }
 #head { position: absolute; top: 0; bottom: 0; width: 2px; background: #fff; pointer-events: none; }
+#cuts i { position: absolute; top: 0; bottom: 0; cursor: pointer; border-left: 1px solid #d45; border-right: 1px solid #d45;
+  background: repeating-linear-gradient(135deg, rgba(220, 70, 80, .5) 0 3px, rgba(220, 70, 80, .15) 3px 7px); }
+#cuts i:hover { background: rgba(220, 70, 80, .6); }
+#cuts i.tmp { pointer-events: none; border-style: dashed; }
+.chip.cut { color: #e88; }
+.cue.cut { opacity: .5; }
+.cue.cut textarea { text-decoration: line-through; }
+.cue .doubt button.fill { border-style: solid; color: #e88; border-color: #6a3a3f; }
+.cue .doubt button.fill.cut { color: var(--dim); text-decoration: line-through; }
 
 h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 18px 0 8px; }
 #panel label { display: block; margin: 8px 0; color: #c9c9cf; }

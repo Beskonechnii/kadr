@@ -105,21 +105,36 @@ async def has_encoder(name: str) -> bool:
     return any(line.split()[1:2] == [name] for line in out.splitlines())
 
 
-async def burn_subs(video: Path, ass: Path, dst: Path) -> Path:
+async def burn_subs(video: Path, ass: Path, dst: Path, keep: list[list[float]] | None = None) -> Path:
     """MP4 с субтитрами, вшитыми в картинку. На Mac кодирует аппаратно через VideoToolbox.
-    ASS собран из пресета (app/style.py), шрифты — свои из fontsdir: тот же рендер, что в превью редактора."""
+    ASS собран из пресета (app/style.py), шрифты — свои из fontsdir: тот же рендер, что в превью редактора.
+    keep — отрезки исходника, которые остаются (монтаж по тексту): склеиваются в один ролик, ASS уже в его времени."""
     if not await has_filter("subtitles"):
         raise RuntimeError(f"{config.ffmpeg()} собран без libass — прожиг невозможен (нужен ffmpeg-full)")
     from .style import FONTS_DIR
 
     vf = f"subtitles='{_escape_filter_path(ass)}':fontsdir='{_escape_filter_path(FONTS_DIR)}'"
+    if keep:
+        audio = any(s.get("codec_type") == "audio" for s in (await probe(video))["streams"])
+        parts, cat = [], ""
+        for k, (a, b) in enumerate(keep):
+            parts.append(f"[0:v]trim={a}:{b},setpts=PTS-STARTPTS[v{k}]")
+            cat += f"[v{k}]"
+            if audio:
+                parts.append(f"[0:a]atrim={a}:{b},asetpts=PTS-STARTPTS[a{k}]")
+                cat += f"[a{k}]"
+        parts.append(f"{cat}concat=n={len(keep)}:v=1:a={int(audio)}[cv]" + ("[ca]" if audio else ""))
+        parts.append(f"[cv]{vf}[vo]")
+        maps = ["-filter_complex", ";".join(parts), "-map", "[vo]", *(["-map", "[ca]"] if audio else [])]
+    else:
+        # только картинка и звук: у копии с дорожками субтитров их не нужно тащить в прожиг
+        maps = ["-map", "0:v:0", "-map", "0:a:0?", "-vf", vf]
     x264 = ["-c:v", "libx264", "-preset", config.BURN_PRESET, "-crf", config.BURN_CRF]
     vt = ["-c:v", "h264_videotoolbox", "-q:v", "65"]
     for codec in ([vt, x264] if await has_encoder("h264_videotoolbox") else [x264]):
         try:
             await _run(
-                # только картинка и звук: у копии с дорожками субтитров их не нужно тащить в прожиг
-                config.ffmpeg(), "-y", "-i", str(video), "-map", "0:v:0", "-map", "0:a:0?", "-vf", vf, *codec,
+                config.ffmpeg(), "-y", "-i", str(video), *maps, *codec,
                 "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k",
                 "-movflags", "+faststart", str(dst),
             )

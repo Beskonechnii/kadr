@@ -41,7 +41,63 @@ def build(ru: list[Cue], en: list[Cue], info: dict, speech: list | None = None) 
             "speech": speech or []}
 
 
-def ass(proj: dict) -> str:
+def cuts(proj: dict) -> list[list[float]]:
+    """Вырезанные куски в исходном времени: по порядку, слитые, в пределах ролика."""
+    out: list[list[float]] = []
+    for a, b in sorted(proj.get("cuts") or []):
+        a, b = max(0.0, float(a)), min(float(proj.get("duration") or b), float(b))
+        if b - a <= 0.01:
+            continue
+        if out and a <= out[-1][1] + 0.01:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return out
+
+
+def kept(proj: dict) -> list[list[float]]:
+    """Что остаётся в ролике, в исходном времени — отрезки для ffmpeg."""
+    t, out = 0.0, []
+    for a, b in cuts(proj):
+        if a > t:
+            out.append([t, a])
+        t = b
+    end = float(proj.get("duration") or 0)
+    if end > t + 0.01:
+        out.append([t, end])
+    return out
+
+
+def without_cuts(proj: dict) -> dict:
+    """Проект во времени собранного ролика: вырезанное выкинуто, остальное сдвинуто.
+    Реплика или слово, попавшие в вырезку целиком, пропадают; задетые частично — укорачиваются."""
+    cs = cuts(proj)
+
+    def at(t: float) -> float:   # исходное время → время после вырезок; внутри вырезки — её начало
+        shift = 0.0
+        for a, b in cs:
+            if t >= b:
+                shift += b - a
+            elif t > a:
+                return round(a - shift, 3)
+            else:
+                break
+        return round(t - shift, 3)
+
+    def stays(a: float, b: float) -> bool:
+        return b - a - sum(max(0.0, min(b, y) - max(a, x)) for x, y in cs) > 0.15
+
+    cues = [{**c, "start": at(c["start"]), "end": at(c["end"]),
+             "words": [[at(w[0]), at(w[1]), *w[2:]] for w in c.get("words") or [] if stays(w[0], w[1])]}
+            for c in proj["cues"] if stays(c["start"], c["end"])]
+    speech = [[at(a), at(b)] for a, b in proj.get("speech") or [] if stays(a, b)]
+    return {**proj, "cues": cues, "speech": speech, "cuts": []}
+
+
+def ass(proj: dict, cut: bool = False) -> str:
+    """cut — для сборки ролика без вырезанного; превью играет исходник, ему вырезки не нужны."""
+    if cut:
+        proj = without_cuts(proj)
     return style.build_ass(proj["cues"], style.resolve(proj["style"], proj["format"]), proj["width"], proj["height"],
                            proj.get("speech"))
 

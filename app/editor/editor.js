@@ -18,6 +18,7 @@ const ZONES = {
 const init = await call('init')
 let { project: proj, presets, defaults } = init
 let jassub = null, sel = -1, active = -1, drag = null
+proj.cuts ||= []   // монтаж по тексту: вырезанные куски [[от, до], …] в исходном времени; реплики не сдвигаются
 
 $('title').textContent = init.title
 $('fmt').textContent = `${proj.format} · ${proj.width}×${proj.height}`
@@ -56,7 +57,7 @@ async function save() { clearTimeout(saveT); await call('save', { proj }); statu
 const setStyle = (k, val) => { proj.style[k] = val; changed() }
 
 // ---------- отмена: снимки реплик и стиля ----------
-const snap = () => JSON.stringify({ cues: proj.cues, style: proj.style })
+const snap = () => JSON.stringify({ cues: proj.cues, style: proj.style, cuts: proj.cuts })
 let hist = [snap()], pos = 0, histT
 function remember() {
   clearTimeout(histT)
@@ -248,6 +249,7 @@ function renderList() {
       <button data-a="split" title="Разрезать по курсору в тексте или по позиции видео (⌘B)">✂︎</button>
       <button data-a="merge" title="Склеить со следующей">⤓</button>
       <button data-a="retr" title="Перевести заново по русскому тексту">↻</button>
+      <button data-a="cut" title="Вырезать из ролика / вернуть (⌘E)">⌁</button>
       <button data-a="del" title="Удалить реплику (⌘⌫)">✕</button></span></div>
       <div class="warn"></div>
       <textarea class="en" rows="1" spellcheck="true"></textarea><textarea class="ru" rows="1" spellcheck="false"></textarea>
@@ -259,6 +261,7 @@ function renderList() {
       const a = e.target.dataset.a
       if (a === 'split') split(i); else if (a === 'merge') merge(i); else if (a === 'retr') retranslate(i, e.target)
       else if (a === 'del') remove(i)
+      else if (a === 'cut') toggleCut(i)
       else if (a === 'short') retranslate(i, e.target, Math.max(10, Math.round(READ_CPS * (c.end - c.start))))
       else if (e.target === el || e.target.closest('.t')) select(i, true)
     }
@@ -273,7 +276,15 @@ function renderList() {
         b.onclick = e => { e.stopPropagation(); hear(ru, c, w) }
         doubt.append(b)
       }
+      for (const w of fillers(c)) {
+        const cut = isCut(w[0], w[1])
+        const b = Object.assign(document.createElement('button'), { textContent: (cut ? '✓ ' : '⌁ ') + w[2], className: 'fill' + (cut ? ' cut' : ''),
+          title: cut ? 'Слово вырезано — вернуть' : 'Слово-паразит — вырезать из ролика' })
+        b.onclick = e => { e.stopPropagation(); cut ? unCut(w[0], w[1]) : cutWord(c, w) }
+        doubt.append(b)
+      }
       el.classList.toggle('bad', problems(c))
+      el.classList.toggle('cut', isCut(c.start, c.end))
     }
     en.value = c.en
     ru.value = c.ru || ''
@@ -296,6 +307,84 @@ function hear(ru, c, w) {
   v.currentTime = Math.max(c.start, w[0] - 0.3)
   // после play: pause от select() при фокусе придёт раньше и не сбросит остановку
   v.play().then(() => { stopAt = w[1] + 0.3 })
+}
+
+// ---------- монтаж по тексту: вырезки ----------
+const fmtS = t => t.toFixed(1).replace('.', ',') + ' с'
+const cutTotal = () => proj.cuts.reduce((t, [a, b]) => t + b - a, 0)
+const cutAt = t => proj.cuts.find(([a, b]) => t >= a && t < b)
+const isCut = (a, b) => proj.cuts.some(([x, y]) => x <= a + 0.05 && y >= b - 0.05)   // кусок целиком внутри вырезки
+function normCuts() {
+  const cs = proj.cuts.map(([a, b]) => [Math.max(0, a), Math.min(duration(), b)]).filter(([a, b]) => b - a > 0.01).sort((x, y) => x[0] - y[0])
+  proj.cuts = cs.reduce((o, [a, b]) => { const l = o.at(-1); if (l && a <= l[1] + 0.01) l[1] = Math.max(l[1], b); else o.push([a, b]); return o }, [])
+}
+function afterCuts() {
+  normCuts()
+  renderCuts()
+  ;[...$('list').children].forEach(el => el.check())
+  const n = cutTotal()
+  $('cutn').hidden = !n
+  $('cutn').textContent = `вырезано ${fmtS(n)}`
+  changed()
+}
+function addCut(a, b) { proj.cuts.push([+a.toFixed(2), +b.toFixed(2)]); afterCuts() }
+function unCut(a, b) {   // вернуть кусок: выкусить [a, b] из вырезок
+  proj.cuts = proj.cuts.flatMap(([x, y]) => x >= b || y <= a ? [[x, y]] : [[x, Math.max(x, a)], [Math.min(y, b), y]])
+  afterCuts()
+}
+function toggleCut(i) {
+  const c = proj.cues[i]
+  if (!c) return
+  isCut(c.start, c.end) ? unCut(c.start, c.end) : addCut(c.start, c.end)
+}
+// слова-паразиты по словам Whisper; «как бы» и «это самое» — парой
+const FILLERS = new Set(['э', 'ээ', 'эм', 'мм', 'ну', 'вот', 'типа', 'короче', 'значит'])
+const PAIRS = [['как', 'бы'], ['это', 'самое']]
+function fillers(c) {
+  const ws = c.words || [], out = []
+  for (let k = 0; k < ws.length; k++) {
+    const w = clean(ws[k][2]), nx = ws[k + 1] && clean(ws[k + 1][2])
+    const pair = PAIRS.find(([a, b]) => a === w && b === nx)
+    if (pair) { out.push([ws[k][0], ws[k + 1][1], pair.join(' ')]); k++ }
+    else if (FILLERS.has(w)) out.push([ws[k][0], ws[k][1], w])
+  }
+  return out.filter(w => (c.ru || '').toLowerCase().includes(w[2]))
+}
+function cutWord(c, w) {
+  // из русского текста слово тоже убираем, чтобы субтитр не показывал то, чего уже не слышно
+  const rx = new RegExp(`(^|\\s)${esc(w[2])}[,.!?…]*(?=\\s|$)`, 'i')
+  c.ru = (c.ru || '').replace(rx, '$1').replace(/\s{2,}/g, ' ').trim()
+  const ta = $('list').children[proj.cues.indexOf(c)]?.querySelector('.ru')
+  if (ta) { ta.value = c.ru; grow(ta) }
+  addCut(w[0], w[1])
+}
+// соседние реплики с почти тем же текстом — дубль, остаётся последняя
+const toks = t => (t || '').toLowerCase().split(/\s+/).map(clean).filter(Boolean)
+function similar(a, b) {
+  const A = toks(a), B = toks(b)
+  if (A.length < 3) return false
+  if (A.every((w, k) => B[k] === w)) return true   // начал, сбился, начал заново
+  return A.filter(w => B.includes(w)).length / Math.max(A.length, B.length) >= 0.7
+}
+function autocut() {
+  const n = { pause: 0, filler: 0, dup: 0 }, sp = proj.speech || [], D = duration()
+  // паузы длиннее секунды: режем, оставляя по 0,25 с воздуха с каждой стороны
+  let prev = 0
+  for (const [a, b] of [...sp, [D, D]]) {
+    if (a - prev > 1 && !isCut(prev + 0.25, a - 0.25)) { proj.cuts.push([prev ? prev + 0.25 : 0, a === D ? D : a - 0.25]); n.pause++ }
+    prev = b
+  }
+  for (const c of proj.cues) for (const w of fillers(c)) if (!isCut(w[0], w[1])) { cutWord(c, w); n.filler++ }
+  for (let i = 0; i + 1 < proj.cues.length; i++) {
+    const c = proj.cues[i]
+    if (similar(c.ru, proj.cues[i + 1].ru) && !isCut(c.start, c.end)) { proj.cuts.push([c.start, c.end]); n.dup++ }
+  }
+  afterCuts()
+  status(`Вырезано: пауз ${n.pause}, слов-паразитов ${n.filler}, дублей ${n.dup} — всего ${fmtS(cutTotal())}. ⌘Z — отменить`)
+}
+$('autocut').onclick = autocut
+function renderCuts() {
+  $('cuts').innerHTML = proj.cuts.map(([a, b]) => `<i style="left:${pct(a)};width:${pct(b - a)}" title="Вырезано ${fmtS(b - a)} — клик вернёт"></i>`).join('')
 }
 
 // ---------- панель над списком: поиск и замена, проблемные, пакетный перевод ----------
@@ -431,11 +520,26 @@ function renderTrack() {
   $('speech').innerHTML = (proj.speech || []).map(([a, b]) => `<i style="left:${pct(a)};width:${pct(b - a)}"></i>`).join('')
   $('blocks').innerHTML = proj.cues.map(() => '<div class="b"><i class="e l"></i><span></span><i class="e r"></i></div>').join('')
   ;[...$('blocks').children].forEach((el, i) => { place(el, proj.cues[i]); label(i) })
+  renderCuts()
   mark()
 }
+let range = null   // ⌥-перетаскивание по дорожке — вырезать кусок
 const timeAt = x => { const r = $('lane').getBoundingClientRect(); return Math.min(duration(), Math.max(0, (x - r.left) / r.width * duration())) }
 $('track').addEventListener('pointerdown', e => {
   const b = e.target.closest('.b'), i = b ? [...$('blocks').children].indexOf(b) : -1
+  const cut = e.target.closest('#cuts i')
+  if (cut) {
+    const k = [...$('cuts').children].indexOf(cut)
+    unCut(...proj.cuts[k])
+    return status('Кусок возвращён в ролик')
+  }
+  if (e.altKey) {
+    range = { t0: timeAt(e.clientX), el: Object.assign(document.createElement('i'), { className: 'tmp' }) }
+    $('cuts').append(range.el)
+    $('track').setPointerCapture(e.pointerId)
+    v.pause()
+    return
+  }
   if (e.target.classList.contains('e')) {
     // край реплики: тянем, не залезая на соседние; видео встаёт на край — видно, где начинается фраза
     const side = e.target.classList.contains('l') ? 'start' : 'end'
@@ -449,6 +553,13 @@ $('track').addEventListener('pointerdown', e => {
   }
 })
 $('track').addEventListener('pointermove', e => {
+  if (range) {
+    const t = timeAt(e.clientX), a = Math.min(range.t0, t), b = Math.max(range.t0, t)
+    Object.assign(range, { a, b })
+    range.el.style.left = pct(a); range.el.style.width = pct(b - a)
+    v.currentTime = t
+    return
+  }
   if (!edge || !edge.moved && Math.abs(e.clientX - edge.cx) < 3) return   // клик по краю — ещё не перетаскивание
   edge.moved = true
   const c = proj.cues[edge.i], prev = proj.cues[edge.i - 1], next = proj.cues[edge.i + 1]
@@ -465,7 +576,15 @@ $('track').addEventListener('pointermove', e => {
   v.currentTime = t
   changed()
 })
-$('track').addEventListener('pointerup', () => { edge = null; remember() })
+$('track').addEventListener('pointerup', () => {
+  if (range) {
+    range.el.remove()
+    if (range.b - range.a > 0.1) { addCut(range.a, range.b); status(`Вырезано ${fmtS(range.b - range.a)}`) }
+    range = null
+  }
+  edge = null
+  remember()
+})
 // колёсико — масштаб вокруг курсора, тачпад вбок — прокрутка
 $('track').addEventListener('wheel', e => {
   if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return
@@ -493,6 +612,9 @@ function tick() {
   }
   if (!drag && st().words && !v.paused) drawBox()
   if (stopAt && t >= stopAt) { v.pause(); stopAt = null }
+  // при просмотре вырезанное пропускаем — видно, как ролик будет смонтирован
+  const skip = !v.paused && !range && cutAt(t)
+  if (skip) v.currentTime = Math.min(skip[1] + 0.001, duration())
   requestAnimationFrame(tick)
 }
 
@@ -574,6 +696,7 @@ addEventListener('keydown', e => {
   else if (e.metaKey && e.key === 'f') { e.preventDefault(); $('find').focus(); $('find').select() }
   else if (e.metaKey && e.key.toLowerCase() === 'z' && document.activeElement.id !== 'pname') { e.preventDefault(); undo(e.shiftKey ? 1 : -1) }
   else if (e.metaKey && e.key === 'Backspace' && !inField()) { e.preventDefault(); if (sel >= 0) remove(sel) }
+  else if (e.metaKey && e.key === 'e') { e.preventDefault(); toggleCut(active >= 0 ? active : sel) }
   else if (inField() || e.metaKey) return
   else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
     e.preventDefault()
@@ -596,6 +719,8 @@ renderPresets()
 syncPanel()
 renderTrack()
 layout()
+$('cutn').hidden = !cutTotal()
+$('cutn').textContent = `вырезано ${fmtS(cutTotal())}`
 if (proj.cues.length) select(0, false)
 requestAnimationFrame(tick)
 status('Готов')

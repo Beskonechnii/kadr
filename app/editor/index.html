@@ -9,6 +9,7 @@
 <header>
   <b id="title"></b>
   <span id="fmt" class="chip"></span>
+  <span id="cutn" class="chip cut" hidden></span>
   <span id="status"></span>
   <span class="grow"></span>
   <button id="reveal">Показать в Finder</button>
@@ -28,6 +29,7 @@
         <label class="row"><input type="checkbox" id="onlybad"> Только проблемные <span id="badn"></span></label>
         <span class="grow"></span>
         <button id="retrall" hidden></button>
+        <button id="autocut" title="Вырезать паузы длиннее секунды, слова-паразиты и дубли; ⌘Z — отменить">⌁ Найти лишнее</button>
       </div>
     </div>
     <div id="list"></div>
@@ -46,7 +48,7 @@
       <button id="play" title="Пробел">▶︎</button>
       <span id="time">0:00.0</span>
       <button id="add" title="Новая реплика в паузе под курсором видео">+ Реплика</button>
-      <div id="track" title="Колёсико — масштаб, края реплики тянутся"><div id="lane"><div id="speech"></div><div id="blocks"></div><div id="head"></div></div></div>
+      <div id="track" title="Колёсико — масштаб, края реплики тянутся"><div id="lane"><div id="speech"></div><div id="blocks"></div><div id="cuts"></div><div id="head"></div></div></div>
     </div>
   </section>
   <aside id="panel">
@@ -90,7 +92,8 @@
     <label>Сетка <select id="gridsel"></select></label>
     <p class="hint">Перетащите субтитр на видео, двойной клик — правка текста.<br>⌘B — разрезать реплику по курсору в тексте или по позиции видео.<br>
       ⌘Z / ⇧⌘Z — отменить / повторить. ↑↓ — соседняя реплика, [ ] — начало / конец реплики на позицию видео,
-      ⌘⌫ — удалить реплику.</p>
+      ⌘⌫ — удалить реплику.<br>Монтаж: ⌘E — вырезать реплику из ролика, ⌥-перетаскивание по дорожке — вырезать кусок,
+      клик по вырезке — вернуть. «Пересобрать видео» склеит ролик без вырезанного.</p>
   </aside>
 </main>
 <dialog id="namedlg">

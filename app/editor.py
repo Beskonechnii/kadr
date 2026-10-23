@@ -164,9 +164,9 @@ class Session:
                 raise RuntimeError("Не нашёл исходное видео")
             dst = d / (proj["files"].get("burned") or f"{self.pj.stem}-en.mp4")
             ass, tmp = d / ".kadr-rebuild.ass", d / f".kadr-rebuild{dst.suffix}"
-            ass.write_text(project.ass(proj), encoding="utf-8")
+            ass.write_text(project.ass(proj, cut=True), encoding="utf-8")
             try:
-                asyncio.run(media.burn_subs(src, ass, tmp))
+                asyncio.run(media.burn_subs(src, ass, tmp, project.kept(proj) if project.cuts(proj) else None))
                 shutil.move(tmp, dst)   # подменяем готовый файл только целиком
             finally:
                 ass.unlink(missing_ok=True)
