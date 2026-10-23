@@ -62,6 +62,8 @@ function remember() {
   clearTimeout(histT)
   const s = snap()
   if (s === hist[pos]) return
+  // сколько раз реплики правили руками — мера качества распознавания и перевода (tools/bench.py --edits)
+  if (JSON.stringify(JSON.parse(hist[pos]).cues) !== JSON.stringify(proj.cues)) proj.edits = (proj.edits || 0) + 1
   hist.splice(pos + 1, Infinity, s)
   if (hist.length > 300) hist.shift()
   pos = hist.length - 1

@@ -1,0 +1,2 @@
+{"date": "2026-10-23", "rev": "85c3e49", "effort": "balance", "translator": "local", "peak_gb": 3.5, "name": "bench", "tl_s": 32.0, "en_fast%": 60}
+{"date": "2026-10-23", "rev": "85c3e49", "effort": "balance", "translator": "local", "peak_gb": 3.5, "name": "test", "wer%": 4.5, "asr_s": 8.9, "cues": 5, "long%": 0, "fast%": 0, "short%": 0, "tl_s": 9.0, "en_fast%": 20, "chrf": 76.9}
