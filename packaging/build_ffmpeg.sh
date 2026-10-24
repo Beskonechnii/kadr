@@ -81,5 +81,7 @@ d=$(fetch ffmpeg)
  && make -j$J >/dev/null && make install >/dev/null)
 
 strip $OUT/bin/ffmpeg $OUT/bin/ffprobe
+# распакованные исходники — 450 MB; архивы остаются, пересборка их распакует заново
+rm -rf $SRC/{freetype,fribidi,harfbuzz,libass,ffmpeg}
 echo "Готово: $OUT/bin"
 otool -L $OUT/bin/ffmpeg | tail -n +2

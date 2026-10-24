@@ -17,12 +17,13 @@ from AppKit import (NSAlert, NSApplication, NSBezierPath, NSBox, NSButton, NSCol
                     NSForegroundColorAttributeName, NSImage, NSImageSymbolConfiguration, NSLevelIndicator,
                     NSMakeRect,
                     NSMenu, NSMenuItem, NSOpenPanel, NSPasteboardTypeFileURL,
-                    NSPasteboardURLReadingFileURLsOnlyKey, NSPopUpButton, NSProgressIndicator,
-                    NSSecureTextField, NSTextField, NSView, NSWindow)
+                    NSPasteboardURLReadingFileURLsOnlyKey, NSPopUpButton, NSProgressIndicator, NSScrollView,
+                    NSSecureTextField, NSTextField, NSTextView, NSView, NSWindow)
 from Foundation import NSURL, NSAttributedString, NSBundle, NSInsetRect, NSObject, NSTimer
 from PyObjCTools import AppHelper
 
-from . import __version__, config, project, runner, transcribe, translate_local, update, watch
+from . import __version__, config, hardware, project, runner, transcribe, translate_local, update, watch
+from .hardware import pressure
 from .transcribe import get_model, release
 
 log = logging.getLogger("kadr")
@@ -61,13 +62,6 @@ def usage() -> tuple[float, float]:
     u = _Usage()
     _libc.proc_pid_rusage(os.getpid(), 0, ctypes.byref(u))
     return u.footprint / 2**30, (u.user + u.system) * _tb.numer / _tb.denom / 1e9
-
-
-def pressure() -> int:
-    """Давление памяти macOS: 1 — норма, 2 — предупреждение, 4 — критично."""
-    v, n = ctypes.c_int(0), ctypes.c_size_t(4)
-    _libc.sysctlbyname(b"kern.memorystatus_vm_pressure_level", ctypes.byref(v), ctypes.byref(n), None, 0)
-    return v.value
 
 
 def prefetch():
@@ -161,13 +155,20 @@ def models_size_gb() -> float:
     return sum(f.stat().st_size for f in Path(config.MODELS_DIR).rglob("*") if f.is_file()) / 2**30
 
 
-def pick_files():
+def pick_files(learn: bool = False):
     panel = NSOpenPanel.openPanel()
     panel.setAllowsMultipleSelection_(True)
-    panel.setAllowedFileTypes_([e.lstrip(".") for e in runner.SUPPORTED_EXT])
+    panel.setAllowedFileTypes_([e.lstrip(".") for e in (runner.MEDIA_EXT if learn else runner.SUPPORTED_EXT)])
     if panel.runModal() == 1:
         for url in panel.URLs():
-            watch.enqueue(Path(url.path()), anywhere=True)
+            watch.enqueue(Path(url.path()), anywhere=True, learn=learn)
+
+
+def message(title: str, text: str):
+    a = NSAlert.alloc().init()
+    a.setMessageText_(title)
+    a.setInformativeText_(text)
+    a.runModal()
 
 
 def ask(title: str, message: str, default: str = "", secure: bool = False) -> str | None:
@@ -193,13 +194,14 @@ def label(text, frame, size=13, color=None, bold=False):
 
 
 class DropView(NSView):
-    """Зона «перетащите видео сюда»; клик — выбор файлов."""
+    """Зона «перетащите видео сюда»; клик — выбор файлов. learn — сырые видео для базы знаний."""
 
     def initWithFrame_(self, frame):
         self = objc.super(DropView, self).initWithFrame_(frame)
         if self is not None:
             self.registerForDraggedTypes_([NSPasteboardTypeFileURL])
-            self.hover = False
+            self.hover = self.learn = False
+            self.texts = ("Перетащите видео сюда", "или нажмите, чтобы выбрать файлы")
         return self
 
     def _set_hover(self, v):
@@ -217,12 +219,12 @@ class DropView(NSView):
         urls = sender.draggingPasteboard().readObjectsForClasses_options_(
             [NSURL], {NSPasteboardURLReadingFileURLsOnlyKey: True}) or []
         for u in urls:
-            watch.enqueue(Path(u.path()), anywhere=True)
+            watch.enqueue(Path(u.path()), anywhere=True, learn=self.learn)
         self._set_hover(False)
         return True
 
     def mouseDown_(self, event):
-        pick_files()
+        pick_files(self.learn)
 
     def drawRect_(self, rect):
         accent = NSColor.controlAccentColor()
@@ -246,8 +248,8 @@ class DropView(NSView):
         iw, ih = icon.size()
         icon.drawInRect_(NSMakeRect((w - iw) / 2, h / 2 + 4, iw, ih))
         for text, size, color, y in (
-                ("Перетащите видео сюда", 17, NSColor.labelColor(), h / 2 - 26),
-                ("или нажмите, чтобы выбрать файлы", 12, NSColor.secondaryLabelColor(), h / 2 - 48)):
+                (self.texts[0], 17, NSColor.labelColor(), h / 2 - 26),
+                (self.texts[1], 12, NSColor.secondaryLabelColor(), h / 2 - 48)):
             s = NSAttributedString.alloc().initWithString_attributes_(
                 text, {NSFontAttributeName: NSFont.systemFontOfSize_(size),
                        NSForegroundColorAttributeName: color})
@@ -256,6 +258,13 @@ class DropView(NSView):
 
 class AppDelegate(NSObject):
     def applicationDidFinishLaunching_(self, note):
+        if why := hardware.blocker():
+            NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+            message("Kadr не запустится на этом Mac", why)
+            NSApplication.sharedApplication().terminate_(None)
+            return
+        threading.Thread(target=worker, daemon=True).start()
+        threading.Thread(target=update.watch_releases, daemon=True).start()
         self.build_menu()
         self.build_window()
         NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
@@ -324,7 +333,11 @@ class AppDelegate(NSObject):
         self.burn.setState_(int(config.BURN))
 
         self.effort = NSPopUpButton.alloc().initWithFrame_pullsDown_(NSMakeRect(92, 62, 330, 26), False)
-        self.effort.addItemsWithTitles_(list(EFFORTS.values()))
+        self.effort.setAutoenablesItems_(False)
+        for k, t in EFFORTS.items():
+            ok = hardware.allowed(k)
+            self.effort.addItemWithTitle_(t if ok else f"{t.split(' —')[0]} — нужно {config.EFFORTS[k]['ram']} ГБ памяти")
+            self.effort.lastItem().setEnabled_(ok)
         self.effort.selectItemAtIndex_(list(EFFORTS).index(config.EFFORT))
         self.effort.setTarget_(self)
         self.effort.setAction_("setEffort:")
@@ -464,8 +477,20 @@ class AppDelegate(NSObject):
             a.setInformativeText_(str(e))
             a.runModal()
 
+    def fits_disk(self, effort: str, translator: str | None = None) -> bool:
+        """Хватит ли места на модели профиля; нет — объясняем и не переключаемся."""
+        if hardware.free_gb() >= (n := hardware.need_gb(effort, translator)):
+            return True
+        message("Не хватает места на диске",
+                f"Для этого режима нужно {n:.0f} ГБ свободного места, сейчас {hardware.free_gb():.1f} ГБ.")
+        return False
+
     def setTranslator_(self, sender):
         k = list(TRANSLATORS)[sender.indexOfSelectedItem()]
+        if k == "local" and not self.fits_disk(config.EFFORT, "local"):
+            cur = "local" if config.TRANSLATOR == "local" else config.CLAUDE_MODEL
+            sender.selectItemAtIndex_(list(TRANSLATORS).index(cur))
+            return
         if k == "local":
             config.TRANSLATOR = "local"
         else:
@@ -478,6 +503,9 @@ class AppDelegate(NSObject):
 
     def setEffort_(self, sender):
         name = list(EFFORTS)[sender.indexOfSelectedItem()]
+        if not self.fits_disk(name):
+            sender.selectItemAtIndex_(list(EFFORTS).index(config.EFFORT))
+            return
         config.set_effort(name)
         save_settings(EFFORT=name)
         threading.Thread(target=apply_effort, daemon=True).start()
@@ -503,6 +531,7 @@ class AppDelegate(NSObject):
             ("Workspace ID…", "askWorkspace:", ""),
             ("Общий контекст (имена, термины)…", "editContext:", ""),
             None,
+            ("Удалить неиспользуемые модели…", "removeModels:", ""),
             ("Добавить «Сделать субтитры» в Finder", "installQuickAction:", ""),
             ("Запускать при входе в систему", "toggleLogin:", ""),
             ("Журнал", "openLog:", ""),
@@ -516,6 +545,7 @@ class AppDelegate(NSObject):
         file_menu = menu("Файл", [
             ("Выбрать видео…", "pickFiles:", "o"),
             ("Открыть в редакторе…", "openProject:", "e"),
+            ("База знаний", "showKnowledge:", "k"),
             ("Открыть «Входящие»", "openInbox:", ""),
             ("Открыть «Готово»", "openDone:", ""),
             None,
@@ -600,11 +630,131 @@ class AppDelegate(NSObject):
         ok, err = (svc.unregisterAndReturnError_(None) if self.login_enabled()
                    else svc.registerAndReturnError_(None))
         if not ok:
-            a = NSAlert.alloc().init()
-            a.setMessageText_("Не получилось")
-            a.setInformativeText_(str(err))
-            a.runModal()
+            message("Не получилось", str(err))
         sender.setState_(int(self.login_enabled()))
+
+    def removeModels_(self, sender):
+        """Модели других профилей: в «Экономе» веса «Баланса» — лишние 8,5 GB, и наоборот."""
+        extra = hardware.unused_models()
+        if not extra:
+            return message("Лишних моделей нет", "На диске только модели текущего режима.")
+        a = NSAlert.alloc().init()
+        a.setMessageText_(f"Удалить {sum(g for _, g in extra):.1f} ГБ?")
+        a.setInformativeText_("\n".join(f"{r.split('/')[1]} — {g:.1f} ГБ" for r, g in extra)
+                              + "\n\nПри смене режима нужная модель скачается заново.")
+        a.addButtonWithTitle_("Удалить")
+        a.addButtonWithTitle_("Отмена")
+        if a.runModal() == 1000:
+            for r, _ in extra:
+                hardware.remove_model(r)
+
+    def showKnowledge_(self, sender):
+        if not getattr(self, "kb", None):
+            self.kb = Knowledge.alloc().init()
+        self.kb.show()
+
+
+def text_area(frame) -> tuple[NSScrollView, NSTextView]:
+    sv = NSScrollView.alloc().initWithFrame_(frame)
+    sv.setHasVerticalScroller_(True)
+    sv.setBorderType_(2)   # рамка как у поля ввода
+    tv = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, frame.size.width, frame.size.height))
+    tv.setAutoresizingMask_(2)
+    tv.setRichText_(False)
+    tv.setFont_(NSFont.systemFontOfSize_(13))
+    tv.setTextContainerInset_((4, 4))
+    # «умные» кавычки и тире ломают «->» и слова в заменах
+    tv.setAutomaticQuoteSubstitutionEnabled_(False)
+    tv.setAutomaticDashSubstitutionEnabled_(False)
+    tv.setAutomaticTextReplacementEnabled_(False)
+    sv.setDocumentView_(tv)
+    return sv, tv
+
+
+def parse_fixes(text: str) -> tuple[dict[str, str], list[str]]:
+    """Строки «было → стало» → словарь замен; строки без стрелки — отдельно, чтобы показать."""
+    fixes, bad = {}, []
+    for line in filter(None, map(str.strip, text.splitlines())):
+        a, arrow, b = line.replace("->", "→").partition("→")
+        if arrow and a.strip():
+            fixes[a.strip()] = b.strip()
+        else:
+            bad.append(line)
+    return fixes, bad
+
+
+class Knowledge(NSObject):
+    """База знаний: сырые видео прогоняются без прожига, правки из редактора становятся заменами,
+    словарь имён и терминов подсказывает распознаванию и переводу. Всё это Kadr применяет к новым видео."""
+
+    def init(self):
+        self = objc.super(Knowledge, self).init()
+        W, H = 560, 640
+        self.window = w = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            NSMakeRect(0, 0, W, H), 1 | 2 | 4, 2, False)
+        w.setTitle_("База знаний")
+        w.setReleasedWhenClosed_(False)
+        v = w.contentView()
+        drop = DropView.alloc().initWithFrame_(NSMakeRect(20, 470, W - 40, 150))
+        drop.learn = True
+        drop.texts = ("Перетащите сырые видео", "Kadr распознает и переведёт их без прожига")
+        hint = label("Откройте результат в редакторе и поправьте русский текст. «Найти в правках» соберёт, "
+                     "что вы исправили, в замены — дальше Kadr делает их в новых видео сам.",
+                     NSMakeRect(20, 420, W - 40, 40), size=12, color=NSColor.secondaryLabelColor())
+        hint.setMaximumNumberOfLines_(3)
+        hint.cell().setWraps_(True)
+        review = NSButton.buttonWithTitle_target_action_("Проверить в редакторе…", self, "review:")
+        review.setFrame_(NSMakeRect(14, 380, 200, 32))
+        learn = NSButton.buttonWithTitle_target_action_("Найти в правках", self, "learn:")
+        learn.setFrame_(NSMakeRect(214, 380, 160, 32))
+        gloss_sv, self.gloss = text_area(NSMakeRect(20, 250, W - 40, 100))
+        fixes_sv, self.fixes = text_area(NSMakeRect(20, 64, W - 40, 150))
+        self.status = label("", NSMakeRect(20, 24, W - 180, 18), size=12, color=NSColor.secondaryLabelColor())
+        save = NSButton.buttonWithTitle_target_action_("Сохранить", self, "save:")
+        save.setFrame_(NSMakeRect(W - 134, 16, 120, 32))
+        save.setKeyEquivalent_("\r")
+        for x in (drop, hint, review, learn, gloss_sv, fixes_sv, self.status, save,
+                  label("Словарь — имена и термины, подсказка распознаванию и переводу:",
+                        NSMakeRect(20, 354, W - 40, 18), size=12, bold=True),
+                  label("Замены — по строке «было → стало», после распознавания и перевода:",
+                        NSMakeRect(20, 218, W - 40, 18), size=12, bold=True)):
+            v.addSubview_(x)
+        w.center()
+        return self
+
+    def show(self):
+        f = config.GLOBAL_CONTEXT
+        self.gloss.setString_(f.read_text(encoding="utf-8") if f.is_file() else "")
+        self.fixes.setString_("\n".join(f"{a} → {b}" for a, b in config.fixes().items()))
+        self.status.setStringValue_("")
+        self.window.makeKeyAndOrderFront_(None)
+
+    def review_(self, sender):
+        config.KNOWLEDGE.mkdir(parents=True, exist_ok=True)
+        panel = NSOpenPanel.openPanel()
+        panel.setCanChooseDirectories_(True)
+        panel.setAllowedFileTypes_(["json"])
+        panel.setDirectoryURL_(NSURL.fileURLWithPath_(str(config.KNOWLEDGE)))
+        if panel.runModal() == 1:
+            NSApplication.sharedApplication().delegate().open_editor(Path(panel.URL().path()))
+
+    def learn_(self, sender):
+        fixes, _ = parse_fixes(self.fixes.string())
+        found = project.learned((config.DONE, config.KNOWLEDGE), fixes)
+        if not found:
+            return self.status.setStringValue_("Новых правок не нашёл")
+        text = self.fixes.string().rstrip()
+        self.fixes.setString_((text + "\n" if text else "") + "\n".join(f"{a} → {b}" for a, b, _ in found))
+        self.status.setStringValue_(f"Добавил {len(found)} из правок — проверьте и сохраните")
+
+    def save_(self, sender):
+        fixes, bad = parse_fixes(self.fixes.string())
+        if bad:
+            return message("Строки без стрелки", "Нужно «было → стало»:\n" + "\n".join(bad[:10]))
+        config.GLOBAL_CONTEXT.parent.mkdir(parents=True, exist_ok=True)
+        config.GLOBAL_CONTEXT.write_text(self.gloss.string().strip(), encoding="utf-8")
+        config.FIXES.write_text(json.dumps(fixes, ensure_ascii=False, indent=1), encoding="utf-8")
+        self.status.setStringValue_(f"Сохранено: замен {len(fixes)}")
 
 
 def worker():
@@ -612,7 +762,9 @@ def worker():
         prefetch()
         if config.KEEP_MODELS is None:
             warm()
-        watch.serve(ready=lambda: config.TRANSLATOR == "local" or bool(config.ANTHROPIC_API_KEY))
+        watch.serve(hold=lambda: hardware.hold() or (
+            None if config.TRANSLATOR == "local" or config.ANTHROPIC_API_KEY
+            else "Жду ключ Anthropic API — меню Kadr → «Ключ Anthropic API…»"))
     except Exception as e:
         log.exception("Ошибка воркера")
         status["text"] = f"❌ {str(e)[:80]}"
@@ -642,8 +794,6 @@ def main():
     app.setActivationPolicy_(0)   # обычное приложение: Dock + меню (и при запуске не из .app)
     delegate = AppDelegate.alloc().init()
     app.setDelegate_(delegate)
-    threading.Thread(target=worker, daemon=True).start()
-    threading.Thread(target=update.watch_releases, daemon=True).start()
     AppHelper.installMachInterrupt()
     AppHelper.runEventLoop()
 

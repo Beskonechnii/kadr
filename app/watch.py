@@ -20,6 +20,7 @@ log = logging.getLogger("kadr")
 
 jobs: queue.Queue[Path] = queue.Queue()
 queued: set[Path] = set()
+learning: set[Path] = set()   # сырые видео для базы знаний: без прожига, результат — в KNOWLEDGE
 
 
 def want(p: Path, anywhere: bool = False) -> bool:
@@ -27,10 +28,12 @@ def want(p: Path, anywhere: bool = False) -> bool:
             and p.suffix.lower() in runner.SUPPORTED_EXT)
 
 
-def enqueue(p: Path, anywhere: bool = False):
+def enqueue(p: Path, anywhere: bool = False, learn: bool = False):
     """anywhere=True — файл открыт явно (иконка, Finder): исходник остаётся на месте."""
     if want(p, anywhere) and p not in queued:
         queued.add(p)
+        if learn:
+            learning.add(p)
         jobs.put(p)
 
 
@@ -59,9 +62,9 @@ def wait_stable(p: Path, quiet: float = 3.0) -> bool:
         time.sleep(0.5)
 
 
-def next_project() -> int:
+def next_project(dirs=(config.DONE, config.FAILED)) -> int:
     """Сквозной номер project-n: следующий после самого большого в «Готово» и «Ошибках»."""
-    nums = [int(m[1]) for d in (config.DONE, config.FAILED) if d.exists() for p in d.iterdir()
+    nums = [int(m[1]) for d in dirs if d.exists() for p in d.iterdir()
             if (m := re.fullmatch(r"project-(\d+)", p.name))]
     return max(nums, default=0) + 1
 
@@ -73,12 +76,13 @@ def handle(src: Path):
     # из inbox забираем исходник в результат; открытый явно — не трогаем
     take = src.parent == config.INBOX
     ctx, hint = runner.read_context(src)
-    n = next_project()
-    out = config.DONE / f"project-{n}"
+    learn = src in learning
+    n = next_project((config.KNOWLEDGE,)) if learn else next_project()
+    out = (config.KNOWLEDGE if learn else config.DONE) / f"project-{n}"
     log.info("[%s] ▶ Начинаю%s", src.name, " (с контекстом)" if ctx else "")
     try:
         with runner.keep_awake(), runner.one_at_a_time():
-            asyncio.run(runner.process(src, out, ctx, hint, config.BURN, number=n))
+            asyncio.run(runner.process(src, out, ctx, hint, config.BURN and not learn, number=n))
     except Exception as e:
         log.exception("[%s] ❌ Ошибка", src.name)
         shutil.rmtree(out, ignore_errors=True)
@@ -94,7 +98,7 @@ def handle(src: Path):
         if f.exists():
             shutil.move(f, out / f.name)
     log.info("[%s] 📁 %s", src.name, out)
-    runner.notify(f"Готово: project-{n} ({src.name})")
+    runner.notify(f"Готово: project-{n} ({src.name})" + (" — поправьте в редакторе для базы знаний" if learn else ""))
 
 
 def main():
@@ -108,8 +112,8 @@ def main():
         pass
 
 
-def serve(ready=lambda: True):
-    """Следит за inbox и обрабатывает очередь по одному; ready() — можно ли брать задачу."""
+def serve(hold=lambda: None):
+    """Следит за inbox и обрабатывает очередь по одному; hold() — почему брать задачу пока нельзя (None — можно)."""
     for d in (config.INBOX, config.DONE, config.FAILED):
         d.mkdir(parents=True, exist_ok=True)
     obs = Observer()
@@ -125,12 +129,16 @@ def serve(ready=lambda: True):
             except queue.Empty:
                 release()   # простой: память — системе, следующее видео подождёт загрузку моделей
                 src = jobs.get()
-            while not ready():
-                time.sleep(1)
+            said = None
+            while why := hold():
+                if why != said:
+                    log.info("⏸ %s", said := why)
+                time.sleep(2)
             try:
                 handle(src)
             finally:
                 queued.discard(src)
+                learning.discard(src)
     finally:
         obs.stop()
 

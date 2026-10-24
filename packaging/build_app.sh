@@ -46,4 +46,6 @@ ditto $APP $STAGE/Kadr.app
 cp "$DOCS/Как установить.txt" "$DOCS/Как пользоваться.txt" $STAGE/
 rm -f $ROOT/Kadr.zip
 ditto -c -k --norsrc --noextattr --keepParent $STAGE $ROOT/Kadr.zip
+# dist и stage — копии того, что уже лежит в корне и в zip (~1,5 GB)
+rm -rf $B/stage $B/dist
 du -sh $ROOT/Kadr.app $ROOT/Kadr.zip

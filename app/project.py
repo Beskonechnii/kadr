@@ -2,8 +2,11 @@
 SRT и прожжённое видео — производные: их можно пересобрать из проекта в любой момент."""
 from __future__ import annotations
 
+import difflib
 import json
+import re
 import subprocess
+from collections import Counter
 from pathlib import Path
 
 from . import config, style
@@ -100,6 +103,29 @@ def ass(proj: dict, cut: bool = False) -> str:
         proj = without_cuts(proj)
     return style.build_ass(proj["cues"], style.resolve(proj["style"], proj["format"]), proj["width"], proj["height"],
                            proj.get("speech"))
+
+
+def corrections(proj: dict) -> list[tuple[str, str]]:
+    """Что человек поправил в русском тексте: (как услышал Whisper, как надо) — по словам реплики.
+    Короткие «было» не берём: замены делаются подстрокой, «и → а» испортило бы весь текст."""
+    out = []
+    for c in proj["cues"]:
+        was = re.findall(r"[\w-]+", " ".join(w[2] for w in c.get("words") or []))
+        now = re.findall(r"[\w-]+", c.get("ru") or "")
+        sm = difflib.SequenceMatcher(None, [w.lower() for w in was], [w.lower() for w in now], autojunk=False)
+        for op, i1, i2, j1, j2 in sm.get_opcodes():
+            a, b = " ".join(was[i1:i2]), " ".join(now[j1:j2])
+            if op == "replace" and i2 - i1 <= 3 and j2 - j1 <= 3 and len(a) >= 4 and a.lower() != b.lower():
+                out.append((a, b))
+    return out
+
+
+def learned(dirs, known: dict[str, str]) -> list[tuple[str, str, int]]:
+    """Правки из всех проектов в dirs, которых ещё нет в заменах: (было, стало, сколько раз), частые — первыми."""
+    known = {k.lower() for k in known}
+    n = Counter(p for d in dirs if d.exists() for pj in d.glob("*/*" + FILE) for p in corrections(load(pj))
+                if p[0].lower() not in known)
+    return [(a, b, k) for (a, b), k in n.most_common()]
 
 
 def save(pj: Path, proj: dict):

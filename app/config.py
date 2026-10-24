@@ -31,7 +31,7 @@ if FROZEN:
     _migrate_dirs()
     DATA = Path.home() / "Library/Application Support" / APP_NAME
     HOME = Path.home() / "Movies" / APP_NAME
-    INBOX, DONE, FAILED = (HOME / d for d in ("Входящие", "Готово", "Ошибки"))
+    INBOX, DONE, FAILED, KNOWLEDGE = (HOME / d for d in ("Входящие", "Готово", "Ошибки", "База знаний"))
     LOGS = Path.home() / "Library/Logs" / APP_NAME
 else:
     from dotenv import load_dotenv
@@ -39,7 +39,7 @@ else:
     load_dotenv(ROOT / ".env")
     # рабочие папки dev-версии — в dev/, чтобы в корне лежали только приложение и гайд
     DATA = HOME = ROOT / "dev"
-    INBOX, DONE, FAILED, LOGS = (DATA / d for d in ("inbox", "done", "failed", "logs"))
+    INBOX, DONE, FAILED, LOGS, KNOWLEDGE = (DATA / d for d in ("inbox", "done", "failed", "logs", "knowledge"))
 
 WORK_TMP = DATA / ".work"
 SETTINGS = DATA / "settings.json"   # то, что меняется из меню приложения; .env (dev) важнее
@@ -58,8 +58,9 @@ def fixes() -> dict[str, str]:
     except (OSError, ValueError):
         return {}
 
-# кэш моделей HF; ставим до импорта huggingface_hub
-os.environ.setdefault("HF_HOME", str(DATA / "models"))
+# кэш моделей HF; ставим до импорта huggingface_hub. Dev берёт тот же кэш, что .app:
+# своя копия в dev/models была ещё 15 GB тех же весов
+os.environ.setdefault("HF_HOME", str(Path.home() / "Library/Application Support" / APP_NAME / "models"))
 MODELS_DIR = os.environ["HF_HOME"]
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
@@ -99,15 +100,19 @@ RAM_GB = int(subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True,
                             text=True).stdout or 0) // 2**30
 # Нагрузка: выбирается в окне вручную, по умолчанию — по объёму памяти.
 # keep — сколько секунд держать модели в памяти после видео (None — всегда, и грузить при старте);
-# both — Whisper и переводчик в памяти одновременно; bg — обработка уступает работе пользователя
+# both — Whisper и переводчик в памяти одновременно; bg — обработка уступает работе пользователя;
+# ram — с какого объёма памяти Mac профиль доступен (пики 5,5 / 6,2 / 10 GB, плюс сама macOS)
 EFFORTS = {
     "eco": {"whisper": "mlx-community/whisper-large-v3-turbo", "llm": "mlx-community/gemma-4-e4b-it-4bit",
-            "keep": 0, "both": False, "bg": True},
+            "keep": 0, "both": False, "bg": True, "ram": 8},
     "balance": {"whisper": "mlx-community/whisper-large-v3-mlx", "llm": "mlx-community/Qwen3.5-9B-MLX-4bit",
-                "keep": 180, "both": False, "bg": False},
+                "keep": 180, "both": False, "bg": False, "ram": 16},
     "max": {"whisper": "mlx-community/whisper-large-v3-mlx", "llm": "mlx-community/Qwen3.5-9B-MLX-4bit",
-            "keep": None, "both": True, "bg": False},
+            "keep": None, "both": True, "bg": False, "ram": 16},
 }
+# размер на диске, GB — чтобы до скачивания знать, хватит ли места
+MODEL_GB = {"mlx-community/whisper-large-v3-turbo": 1.5, "mlx-community/whisper-large-v3-mlx": 2.9,
+            "mlx-community/gemma-4-e4b-it-4bit": 4.8, "mlx-community/Qwen3.5-9B-MLX-4bit": 5.6}
 
 
 def set_effort(name: str):
@@ -131,7 +136,9 @@ def job_qos():
     _libc.pthread_set_qos_class_self_np(0x11 if EFFORTS[EFFORT]["bg"] else 0x15, 0)   # UTILITY | DEFAULT
 
 
-set_effort(os.getenv("EFFORT") if os.getenv("EFFORT") in EFFORTS else "balance" if RAM_GB >= 16 else "eco")
+# сохранённый профиль не по памяти этого Mac (перенесли настройки, сменили Mac) — по умолчанию
+_e = os.getenv("EFFORT")
+set_effort(_e if _e in EFFORTS and EFFORTS[_e]["ram"] <= RAM_GB else "balance" if RAM_GB >= 16 else "eco")
 
 # освобождённые буферы MLX держит у себя для повторного использования; без лимита они копятся
 MLX_CACHE = int(float(os.getenv("MLX_CACHE_GB", "1")) * 2**30)
