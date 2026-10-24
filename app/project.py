@@ -2,15 +2,13 @@
 SRT и прожжённое видео — производные: их можно пересобрать из проекта в любой момент."""
 from __future__ import annotations
 
-import difflib
 import json
-import re
 import subprocess
 from collections import Counter
 from pathlib import Path
 
 from . import config, style
-from .srt_utils import Cue, read_srt, write_srt
+from .srt_utils import Cue, read_srt, word_fixes, write_srt
 
 FILE = "project.json"
 PLAYABLE = (".mp4", ".mov", ".m4v")   # что играет <video> в WKWebView (mkv — нет)
@@ -35,8 +33,9 @@ def build(ru: list[Cue], en: list[Cue], info: dict, speech: list | None = None) 
     w, h = display_size(info)
     fmt = style.fmt_of(w, h)
     # переводчики сохраняют тайминги реплик, но выкидывают пустые и перенумеровывают — связываем по началу
-    en_by_start = {round(c.start, 3): c.text for c in en}
-    cues = [{"start": c.start, "end": c.end, "ru": c.text, "en": en_by_start.get(round(c.start, 3), ""),
+    en_by_start, none = {round(c.start, 3): c for c in en}, Cue(0, 0, 0, "")
+    cues = [{"start": c.start, "end": c.end, "ru": c.text,
+             "en": (e := en_by_start.get(round(c.start, 3), none)).text, "en_conf": e.conf,
              "words": [[round(x.start, 3), round(x.end, 3), x.text, round(x.prob, 2)] for x in c.words]} for c in ru]
     return {"version": 1, "width": w, "height": h, "format": fmt,
             "duration": float(info.get("format", {}).get("duration", 0)),
@@ -106,18 +105,8 @@ def ass(proj: dict, cut: bool = False) -> str:
 
 
 def corrections(proj: dict) -> list[tuple[str, str]]:
-    """Что человек поправил в русском тексте: (как услышал Whisper, как надо) — по словам реплики.
-    Короткие «было» не берём: замены делаются подстрокой, «и → а» испортило бы весь текст."""
-    out = []
-    for c in proj["cues"]:
-        was = re.findall(r"[\w-]+", " ".join(w[2] for w in c.get("words") or []))
-        now = re.findall(r"[\w-]+", c.get("ru") or "")
-        sm = difflib.SequenceMatcher(None, [w.lower() for w in was], [w.lower() for w in now], autojunk=False)
-        for op, i1, i2, j1, j2 in sm.get_opcodes():
-            a, b = " ".join(was[i1:i2]), " ".join(now[j1:j2])
-            if op == "replace" and i2 - i1 <= 3 and j2 - j1 <= 3 and len(a) >= 4 and a.lower() != b.lower():
-                out.append((a, b))
-    return out
+    """Что человек поправил в русском тексте: (как услышал Whisper, как надо) — по словам реплики."""
+    return [p for c in proj["cues"] for p in word_fixes(" ".join(w[2] for w in c.get("words") or []), c.get("ru") or "")]
 
 
 def learned(dirs, known: dict[str, str]) -> list[tuple[str, str, int]]:

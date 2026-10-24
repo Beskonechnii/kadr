@@ -28,43 +28,13 @@ sys.path.insert(0, str(ROOT))
 
 from app import config, media, runner  # noqa: E402
 from app.srt_utils import CPS_MAX, MAX_CUE_CHARS, Cue, read_srt  # noqa: E402
+from app.train import align, norm, wer  # noqa: E402  WER — общий с окном «Обучение»
 
 TEST, OUT = ROOT / "test", ROOT / "test" / ".bench"
 MEDIA = (".mp4", ".mov", ".m4v", ".mkv", ".m4a", ".mp3", ".wav")
 
 
 # ---------- метрики ----------
-def norm(text: str) -> list[str]:
-    text = text.lower().replace("ё", "е")
-    return re.sub(r"[^\w\s]|_", " ", text).split()
-
-
-def align(ref: list[str], hyp: list[str]) -> list[tuple[str, str | None, str | None]]:
-    """Левенштейн по словам с обратным ходом: [('ok'|'sub'|'del'|'ins', ref, hyp), …]."""
-    n, m = len(ref), len(hyp)
-    d = [[0] * (m + 1) for _ in range(n + 1)]
-    for i in range(n + 1):
-        d[i][0] = i
-    for j in range(m + 1):
-        d[0][j] = j
-    for i in range(1, n + 1):
-        for j in range(1, m + 1):
-            d[i][j] = min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (ref[i - 1] != hyp[j - 1]))
-    ops, i, j = [], n, m
-    while i or j:
-        if i and j and d[i][j] == d[i - 1][j - 1] + (ref[i - 1] != hyp[j - 1]):
-            ops.append(("ok" if ref[i - 1] == hyp[j - 1] else "sub", ref[i - 1], hyp[j - 1])); i, j = i - 1, j - 1
-        elif i and d[i][j] == d[i - 1][j] + 1:
-            ops.append(("del", ref[i - 1], None)); i -= 1
-        else:
-            ops.append(("ins", None, hyp[j - 1])); j -= 1
-    return ops[::-1]
-
-
-def wer(ops, ref_len: int) -> float:
-    return sum(op != "ok" for op, *_ in ops) / max(ref_len, 1)
-
-
 def chrf(ref: str, hyp: str, n: int = 6, beta: float = 2.0) -> float:
     """chrF: F-мера по символьным n-граммам (1..6), без пробелов, как в sacrebleu."""
     ref, hyp = re.sub(r"\s+", "", ref.lower()), re.sub(r"\s+", "", hyp.lower())
@@ -121,6 +91,8 @@ async def bench_tl(name: str, ref_ru: list[Cue], ref_en: list[Cue] | None, ctx: 
     OUT.mkdir(exist_ok=True)
     write_srt(en, OUT / f"{name}.en.srt")
     r = {"tl_s": sec, "en_fast%": seg_stats(en)["fast%"], "en_cues": en}
+    if confs := [c.conf for c in en if c.conf is not None]:   # только локальный переводчик
+        r["en_conf"] = round(sum(confs) / len(confs), 2)
     if ref_en:
         r["chrf"] = round(100 * chrf(" ".join(c.text for c in ref_en), " ".join(c.text for c in en)), 1)
     return r
@@ -147,7 +119,16 @@ async def judge(ru: list[Cue], en: list[Cue]) -> dict:
     scores = json.loads(text[text.index("{"):text.rindex("}") + 1])["scores"]
     s = [x["s"] for x in scores]
     bad = [(x["id"], x["s"], x.get("why", "")) for x in scores if x["s"] <= 3]
-    return {"judge": round(sum(s) / max(len(s), 1), 2), "judge_bad": bad}
+    r = {"judge": round(sum(s) / max(len(s), 1), 2), "judge_bad": bad}
+    # ловит ли уверенность переводчика плохие реплики: ранговая корреляция с баллом судьи (около 0 — не ловит)
+    conf, by_id = {round(c.start, 3): c.conf for c in en}, {x["id"]: x["s"] for x in scores}
+    pairs = [(conf[round(c.start, 3)], by_id[c.idx]) for c in ru
+             if conf.get(round(c.start, 3)) is not None and c.idx in by_id]
+    if len(pairs) > 5 and len({s for _, s in pairs}) > 1:
+        from scipy.stats import spearmanr
+
+        r["conf~judge"] = round(float(spearmanr(*zip(*pairs)).statistic), 2)
+    return r
 
 
 def edits_report():
@@ -205,7 +186,8 @@ async def main():
                     print(f"⚠️ Судья не сработал: {runner.human_error(e)}", flush=True)
         results.append(row)
 
-    cols = ["name", "wer%", "asr_s", "cues", "long%", "fast%", "short%", "chrf", "judge", "en_fast%", "tl_s"]
+    cols = ["name", "wer%", "asr_s", "cues", "long%", "fast%", "short%", "chrf", "judge", "en_conf", "conf~judge",
+            "en_fast%", "tl_s"]
     cols = [c for c in cols if any(c in r for r in results)]
     print(f"\n{date.today()} {rev} · {config.EFFORT} · whisper {config.WHISPER_MODEL.split('/')[-1]} · "
           f"перевод {config.TRANSLATOR}{'' if config.TRANSLATOR == 'claude' else ' ' + config.LOCAL_LLM.split('/')[-1]}"

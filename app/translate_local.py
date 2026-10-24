@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import re
 import threading
 
@@ -78,26 +79,37 @@ def warm():
     _mlx_thread.submit(_load).result()
 
 
-def _generate(prompt: str, max_tokens: int) -> str:
-    from mlx_lm import generate
+def _generate(prompt: str, max_tokens: int) -> tuple[str, list[tuple[int, float]]]:
+    """Ответ и для каждого токена — (с какого знака ответа он начинается, log-вероятность)."""
+    from mlx_lm import stream_generate
 
     model, tok = _load()
     text = tok.apply_chat_template(
         [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
         add_generation_prompt=True, tokenize=False, enable_thinking=False)
-    return generate(model, tok, text, max_tokens=max_tokens)
+    out, marks = "", []
+    for r in stream_generate(model, tok, text, max_tokens=max_tokens):
+        marks.append((len(out), r.logprobs[r.token].item()))
+        out += r.text
+    return out, marks
 
 
-def _parse(out: str, want: set[int]) -> dict[int, str]:
-    res = {}
-    for line in out.splitlines():
+def _parse(out: str, want: set[int], marks=(), conf: dict | None = None) -> dict[int, str]:
+    """Строки «N: перевод»; conf — сюда уверенность реплики: средняя вероятность токенов её перевода
+    (геометрическое среднее). Номер «N:» не считаем — в нём модель уверена всегда."""
+    res, pos = {}, 0
+    for line in out.splitlines(keepends=True):
         m = _LINE.match(line)
         if m and int(m[1]) in want:
             res[int(m[1])] = m[2].strip()
+            lps = [lp for p, lp in marks if pos + m.start(2) <= p < pos + len(line.rstrip())]
+            if conf is not None and lps:
+                conf[int(m[1])] = round(math.exp(sum(lps) / len(lps)), 3)
+        pos += len(line)
     return res
 
 
-def _translate_chunk(chunk: list[Cue], prev: list[Cue], context: str) -> dict[int, str]:
+def _translate_chunk(chunk: list[Cue], prev: list[Cue], context: str, conf: dict | None = None) -> dict[int, str]:
     config.job_qos()
     head = []
     if context:
@@ -110,8 +122,8 @@ def _translate_chunk(chunk: list[Cue], prev: list[Cue], context: str) -> dict[in
     for attempt in range(3):
         body = "\n".join(prompt_line(c) for c in todo)
         prompt = "\n\n".join(head + [f"Translate these {len(todo)} lines:\n{body}"])
-        out = _generate(prompt, max_tokens=80 * len(todo) + 200)
-        result.update(_parse(out, {c.idx for c in todo}))
+        out, marks = _generate(prompt, max_tokens=80 * len(todo) + 200)
+        result.update(_parse(out, {c.idx for c in todo}, marks, conf))
         todo = [c for c in chunk if c.idx not in result]
         if not todo:
             return result
@@ -128,13 +140,14 @@ async def translate_cues_local(cues: list[Cue], user_context: str = "",
         return []
     chunks = [cues[i:i + CHUNK] for i in range(0, len(cues), CHUNK)]
     translated: dict[int, str] = {}
+    conf: dict[int, float] = {}
     for k, chunk in enumerate(chunks):
         prev = cues[max(0, k * CHUNK - OVERLAP):k * CHUNK]
         translated.update(await asyncio.wrap_future(
-            _mlx_thread.submit(_translate_chunk, chunk, prev, user_context)))
+            _mlx_thread.submit(_translate_chunk, chunk, prev, user_context, conf)))
         if on_progress:
             await on_progress((k + 1) / len(chunks))
-    out = [Cue(c.idx, c.start, c.end, translated.get(c.idx, c.text)) for c in cues]
+    out = [Cue(c.idx, c.start, c.end, translated.get(c.idx, c.text), conf=conf.get(c.idx)) for c in cues]
     out = [c for c in out if c.text.strip()]
     for n, c in enumerate(out, 1):
         c.idx = n

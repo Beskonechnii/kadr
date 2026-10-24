@@ -22,7 +22,7 @@ from AppKit import (NSAlert, NSApplication, NSBezierPath, NSBox, NSButton, NSCol
 from Foundation import NSURL, NSAttributedString, NSBundle, NSInsetRect, NSObject, NSTimer
 from PyObjCTools import AppHelper
 
-from . import __version__, config, hardware, project, runner, transcribe, translate_local, update, watch
+from . import __version__, config, hardware, project, runner, train, transcribe, translate_local, update, watch
 from .hardware import pressure
 from .transcribe import get_model, release
 
@@ -155,13 +155,17 @@ def models_size_gb() -> float:
     return sum(f.stat().st_size for f in Path(config.MODELS_DIR).rglob("*") if f.is_file()) / 2**30
 
 
-def pick_files(learn: bool = False):
+def choose(exts, many: bool = True, title: str = "") -> list[Path]:
     panel = NSOpenPanel.openPanel()
-    panel.setAllowsMultipleSelection_(True)
-    panel.setAllowedFileTypes_([e.lstrip(".") for e in (runner.MEDIA_EXT if learn else runner.SUPPORTED_EXT)])
-    if panel.runModal() == 1:
-        for url in panel.URLs():
-            watch.enqueue(Path(url.path()), anywhere=True, learn=learn)
+    panel.setAllowsMultipleSelection_(many)
+    panel.setAllowedFileTypes_([e.lstrip(".") for e in exts])
+    panel.setMessage_(title)
+    return [Path(u.path()) for u in panel.URLs()] if panel.runModal() == 1 else []
+
+
+def pick_files(learn: bool = False):
+    for p in choose(runner.MEDIA_EXT if learn else runner.SUPPORTED_EXT):
+        watch.enqueue(p, anywhere=True, learn=learn)
 
 
 def message(title: str, text: str):
@@ -201,6 +205,7 @@ class DropView(NSView):
         if self is not None:
             self.registerForDraggedTypes_([NSPasteboardTypeFileURL])
             self.hover = self.learn = False
+            self.on_drop = None   # своя обработка файлов вместо очереди (окно «Обучение»)
             self.texts = ("Перетащите видео сюда", "или нажмите, чтобы выбрать файлы")
         return self
 
@@ -218,13 +223,18 @@ class DropView(NSView):
     def performDragOperation_(self, sender):
         urls = sender.draggingPasteboard().readObjectsForClasses_options_(
             [NSURL], {NSPasteboardURLReadingFileURLsOnlyKey: True}) or []
-        for u in urls:
+        if self.on_drop:
+            self.on_drop([Path(u.path()) for u in urls])
+        for u in urls if not self.on_drop else ():
             watch.enqueue(Path(u.path()), anywhere=True, learn=self.learn)
         self._set_hover(False)
         return True
 
     def mouseDown_(self, event):
-        pick_files(self.learn)
+        if self.on_drop:
+            self.on_drop(choose(runner.MEDIA_EXT | set(train.SUBS)))
+        else:
+            pick_files(self.learn)
 
     def drawRect_(self, rect):
         accent = NSColor.controlAccentColor()
@@ -546,6 +556,7 @@ class AppDelegate(NSObject):
             ("Выбрать видео…", "pickFiles:", "o"),
             ("Открыть в редакторе…", "openProject:", "e"),
             ("База знаний", "showKnowledge:", "k"),
+            ("Обучение", "showTraining:", "l"),
             ("Открыть «Входящие»", "openInbox:", ""),
             ("Открыть «Готово»", "openDone:", ""),
             None,
@@ -653,6 +664,11 @@ class AppDelegate(NSObject):
             self.kb = Knowledge.alloc().init()
         self.kb.show()
 
+    def showTraining_(self, sender):
+        if not getattr(self, "tr", None):
+            self.tr = Training.alloc().init()
+        self.tr.show()
+
 
 def text_area(frame) -> tuple[NSScrollView, NSTextView]:
     sv = NSScrollView.alloc().initWithFrame_(frame)
@@ -740,12 +756,16 @@ class Knowledge(NSObject):
 
     def learn_(self, sender):
         fixes, _ = parse_fixes(self.fixes.string())
-        found = project.learned((config.DONE, config.KNOWLEDGE), fixes)
+        self.suggest(project.learned((config.DONE, config.KNOWLEDGE), fixes), "из правок")
+
+    @objc.python_method
+    def suggest(self, found, where: str):
+        """Дописать предложенные замены в список — сохраняет человек, проверив."""
         if not found:
-            return self.status.setStringValue_("Новых правок не нашёл")
+            return self.status.setStringValue_(f"Новых замен {where} не нашёл")
         text = self.fixes.string().rstrip()
         self.fixes.setString_((text + "\n" if text else "") + "\n".join(f"{a} → {b}" for a, b, _ in found))
-        self.status.setStringValue_(f"Добавил {len(found)} из правок — проверьте и сохраните")
+        self.status.setStringValue_(f"Добавил {len(found)} {where} — проверьте и сохраните")
 
     def save_(self, sender):
         fixes, bad = parse_fixes(self.fixes.string())
@@ -755,6 +775,110 @@ class Knowledge(NSObject):
         config.GLOBAL_CONTEXT.write_text(self.gloss.string().strip(), encoding="utf-8")
         config.FIXES.write_text(json.dumps(fixes, ensure_ascii=False, indent=1), encoding="utf-8")
         self.status.setStringValue_(f"Сохранено: замен {len(fixes)}")
+
+
+class Training(NSObject):
+    """Обучение по эталонам: видео + ручные субтитры → WER распознавания и замены из расхождений.
+    «Проверить все» после новых замен или словаря показывает, стало ли лучше."""
+
+    def init(self):
+        self = objc.super(Training, self).init()
+        W, H = 620, 600
+        self.busy = False
+        self.window = w = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            NSMakeRect(0, 0, W, H), 1 | 2 | 4, 2, False)
+        w.setTitle_("Обучение")
+        w.setReleasedWhenClosed_(False)
+        v = w.contentView()
+        drop = DropView.alloc().initWithFrame_(NSMakeRect(20, 440, W - 40, 140))
+        drop.on_drop = self.dropped
+        drop.texts = ("Перетащите видео и его ручные субтитры", ".srt или .vtt с тем же именем — с ними Kadr сравнит распознавание")
+        sv, self.table = text_area(NSMakeRect(20, 110, W - 40, 300))
+        self.table.setEditable_(False)
+        self.table.setFont_(NSFont.monospacedSystemFontOfSize_weight_(12, 0))
+        self.status = label("", NSMakeRect(20, 76, W - 40, 18), size=12, color=NSColor.secondaryLabelColor())
+        buttons = [("Проверить все", "checkAll:", 150), ("Расхождения → в замены", "toFixes:", 210),
+                   ("Папка эталонов", "openRefs:", 150)]
+        x = 14
+        for title, action, width in buttons:
+            b = NSButton.buttonWithTitle_target_action_(title, self, action)
+            b.setFrame_(NSMakeRect(x, 24, width, 32))
+            v.addSubview_(b)
+            x += width
+        for x in (drop, sv, self.status, label("Эталоны и ошибки распознавания:", NSMakeRect(20, 414, W - 40, 18),
+                                                size=12, bold=True)):
+            v.addSubview_(x)
+        w.center()
+        return self
+
+    def show(self):
+        self.table.setString_(train.report())
+        self.window.makeKeyAndOrderFront_(None)
+
+    @objc.python_method
+    def say(self, text):
+        AppHelper.callAfter(self.status.setStringValue_, text)
+
+    @objc.python_method
+    def dropped(self, paths):
+        subs = {train.stem(p): p for p in paths if p.suffix.lower() in train.SUBS}
+        pairs = []
+        for v in (p for p in paths if p.suffix.lower() in runner.MEDIA_EXT):
+            s = subs.pop(train.stem(v), None) or next(iter(choose(
+                train.SUBS, many=False, title=f"Ручные русские субтитры к «{v.name}»")), None)
+            if s:
+                pairs.append((v, s))
+        if subs:
+            message("Субтитры без видео", "Перетащите вместе с ними видео: " + ", ".join(p.name for p in subs.values()))
+        if pairs:
+            self.work(lambda: [self._add(*p) for p in pairs])
+
+    @objc.python_method
+    def _add(self, video, subs):
+        self.say(f"Сохраняю эталон {video.name}…")
+        d = train.add(video, subs)
+        self._check(d)
+
+    @objc.python_method
+    def _check(self, d):
+        self.say(f"Распознаю {d.name}…")
+        r = train.check(d)
+        self.say(f"{d.name}: ошибок {r['wer']}%")
+        AppHelper.callAfter(self.table.setString_, train.report())
+
+    @objc.python_method
+    def work(self, fn):
+        """Тяжёлое — в фоне, по одному; модели после проверки — как после видео: выгружаются, если не «Максимум»."""
+        if self.busy:
+            return message("Подождите", "Проверка ещё идёт.")
+        self.busy = True
+
+        def run():
+            try:
+                fn()
+            except Exception as e:
+                log.exception("Обучение: ошибка")
+                self.say(f"❌ {str(e)[:100]}")
+            finally:
+                if config.KEEP_MODELS is not None and not status["busy"]:
+                    release()
+                self.busy = False
+        threading.Thread(target=run, daemon=True).start()
+
+    def checkAll_(self, sender):
+        refs = train.refs()
+        if not refs:
+            return self.status.setStringValue_("Эталонов пока нет")
+        self.work(lambda: [self._check(d) for d in refs])
+
+    def toFixes_(self, sender):
+        delegate = NSApplication.sharedApplication().delegate()
+        delegate.showKnowledge_(None)
+        delegate.kb.suggest(train.suggestions(parse_fixes(delegate.kb.fixes.string())[0]), "из эталонов")
+
+    def openRefs_(self, sender):
+        train.REFS.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["open", str(train.REFS)])
 
 
 def worker():

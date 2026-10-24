@@ -1,6 +1,7 @@
 """SRT: модель реплики, ресегментация по словам, перенос строк, запись/чтение."""
 from __future__ import annotations
 
+import difflib
 import re
 import textwrap
 from dataclasses import dataclass, field
@@ -29,6 +30,7 @@ class Cue:
     end: float
     text: str
     words: list[Word] = field(default_factory=list)   # тайминги слов от Whisper — для подсветки и правки
+    conf: float | None = None   # уверенность локального переводчика в реплике; у Claude вероятностей нет
 
 
 def fmt_ts(t: float) -> str:
@@ -127,6 +129,16 @@ def apply_fixes(cues: list[Cue], fixes: dict[str, str]) -> list[Cue]:
     return cues
 
 
+def word_fixes(was: str, now: str) -> list[tuple[str, str]]:
+    """Где текст «now» исправляет «was» — пары слов (до трёх подряд). Короткие «было» не берём:
+    замены делаются подстрокой, «и → а» испортило бы весь текст."""
+    a, b = re.findall(r"[\w-]+", was), re.findall(r"[\w-]+", now)
+    sm = difflib.SequenceMatcher(None, [w.lower() for w in a], [w.lower() for w in b], autojunk=False)
+    return [(x, y) for op, i1, i2, j1, j2 in sm.get_opcodes()
+            if op == "replace" and i2 - i1 <= 3 and j2 - j1 <= 3
+            and len(x := " ".join(a[i1:i2])) >= 4 and x.lower() != (y := " ".join(b[j1:j2])).lower()]
+
+
 def prompt_line(c: Cue) -> str:
     """Строка реплики для переводчика. Если русский уже не успеть прочитать за время реплики,
     добавляем бюджет знаков: иначе английский выходит длиннее и ещё быстрее."""
@@ -148,8 +160,11 @@ def read_srt(path: Path) -> list[Cue]:
         lines = block.strip().split("\n")
         if len(lines) < 2:
             continue
-        ts_line = lines[1] if "-->" in lines[1] else lines[0]
-        text_lines = lines[2:] if "-->" in lines[1] else lines[1:]
-        a, b = ts_line.split("-->")
-        cues.append(Cue(len(cues) + 1, parse_ts(a), parse_ts(b), " ".join(text_lines).strip()))
+        ts = next((i for i, line in enumerate(lines[:2]) if "-->" in line), None)
+        if ts is None:   # заголовок WEBVTT, NOTE, STYLE
+            continue
+        a, b = lines[ts].split("-->")
+        # VTT: после времени бывают настройки («align:start»), в тексте — теги <c>, <i>
+        text = re.sub(r"<[^>]+>", "", " ".join(lines[ts + 1:])).strip()
+        cues.append(Cue(len(cues) + 1, parse_ts(a), parse_ts(b.split()[0]), text))
     return cues
