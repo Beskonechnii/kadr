@@ -16,3 +16,9 @@
 {"date": "2026-10-23", "rev": "dfd5420", "effort": "balance", "translator": "local", "peak_gb": 1.4, "name": "test", "tl_s": 6.4, "en_fast%": 0, "chrf": 78.5, "judge": 4.0}
 {"date": "2026-10-23", "rev": "dfd5420", "effort": "balance", "translator": "local", "peak_gb": 3.8, "name": "bench", "tl_s": 32.4, "en_fast%": 57, "judge": 4.6}
 {"date": "2026-10-25", "rev": "ce2a15a", "effort": "balance", "translator": "local", "peak_gb": 1.7, "name": "bench", "tl_s": 29.9, "en_fast%": 57, "en_conf": 0.85, "judge": 4.53, "conf~judge": 0.5}
+{"date": "2026-10-25", "rev": "97c06e1", "effort": "balance", "translator": "local", "peak_gb": 1.0, "name": "bench", "tl_s": 30.2, "en_fast%": 57, "en_conf": 0.85, "judge": 4.6, "conf~judge": 0.47}
+{"date": "2026-10-25", "rev": "97c06e1", "effort": "balance", "translator": "local", "peak_gb": 1.0, "name": "test", "tl_s": 4.6, "en_fast%": 0, "en_conf": 0.84, "chrf": 80.7, "judge": 3.8}
+{"date": "2026-10-25", "rev": "97c06e1", "effort": "balance", "translator": "local", "peak_gb": 3.4, "name": "stream3m", "tl_s": 28.7, "en_fast%": 17, "en_conf": 0.71, "judge": 2.87, "conf~judge": 0.69}
+{"date": "2026-10-25", "rev": "97c06e1", "effort": "balance", "translator": "local", "peak_gb": 3.5, "name": "stream3m", "tl_s": 26.9, "en_fast%": 17, "en_conf": 0.71, "judge": 2.97, "conf~judge": 0.56}
+{"date": "2026-10-25", "rev": "97c06e1", "effort": "balance", "translator": "local", "peak_gb": 1.7, "name": "trip", "tl_s": 117.5, "en_fast%": 17, "en_conf": 0.86, "chrf": 72.9, "judge": 4.62, "conf~judge": 0.27}
+{"date": "2026-10-25", "rev": "97c06e1", "effort": "balance", "translator": "local", "peak_gb": 3.4, "name": "trip", "tl_s": 106.9, "en_fast%": 17, "en_conf": 0.86, "chrf": 72.9, "judge": 4.6, "conf~judge": 0.28}

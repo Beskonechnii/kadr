@@ -117,21 +117,23 @@ def _translate_chunk(chunk: list[Cue], prev: list[Cue], context: str, conf: dict
     if prev:
         head.append("Previous lines, for context only — do not translate:\n" +
                     "\n".join(f"{c.idx}: {c.text}" for c in prev))
-    result: dict[int, str] = {}
-    todo = chunk
-    for attempt in range(3):
-        body = "\n".join(prompt_line(c) for c in todo)
-        prompt = "\n\n".join(head + [f"Translate these {len(todo)} lines:\n{body}"])
-        out, marks = _generate(prompt, max_tokens=80 * len(todo) + 200)
-        result.update(_parse(out, {c.idx for c in todo}, marks, conf))
-        todo = [c for c in chunk if c.idx not in result]
-        if not todo:
+    body = "\n".join(prompt_line(c) for c in chunk)
+    prompt = "\n\n".join(head + [f"Translate these {len(chunk)} lines:\n{body}"])
+    for _ in range(1 if len(chunk) > 1 else 3):
+        out, marks = _generate(prompt, max_tokens=80 * len(chunk) + 200)
+        result = _parse(out, {c.idx for c in chunk}, marks, conf)
+        if len(result) == len(chunk):
             return result
-        log.warning("Не хватает %d реплик (попытка %d), повторяю", len(todo), attempt + 1)
-    # не перевелось — оставим оригинал, чтобы не терять тайминг
-    for c in todo:
-        result[c.idx] = c.text
-    return result
+    if len(chunk) == 1:   # не перевелось — оставим оригинал, чтобы не терять тайминг
+        log.warning("Реплика %d не перевелась, оставляю оригинал", chunk[0].idx)
+        return {chunk[0].idx: chunk[0].text}
+    # пропуск почти всегда значит, что модель склеила две реплики и дальше перевод съехал на строку:
+    # остальному куску верить нельзя, а дозапрос одних пропущенных сдвиг прячет. Короче кусок — реже сдвиг
+    log.warning("Куску %d–%d не хватает %d реплик — перевожу заново половинами",
+                chunk[0].idx, chunk[-1].idx, len(chunk) - len(result))
+    h = len(chunk) // 2
+    a, b = chunk[:h], chunk[h:]
+    return _translate_chunk(a, prev, context, conf) | _translate_chunk(b, (list(prev) + a)[-OVERLAP:], context, conf)
 
 
 async def translate_cues_local(cues: list[Cue], user_context: str = "",
