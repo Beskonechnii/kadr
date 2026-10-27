@@ -45,8 +45,10 @@ def align(ref: list[str], hyp: list[str]) -> list[tuple[str, str | None, str | N
     return ops[::-1]
 
 
-def wer(ops, ref_len: int) -> float:
-    return sum(op != "ok" for op, *_ in ops) / max(ref_len, 1)
+def wer(ops, ref_len: int, partial: bool = False) -> float:
+    """partial — эталон не весь текст ролика (вшитые субтитры: монтажёр подписал не каждую фразу):
+    лишние слова распознавания там чаще правда, чем ошибка, — считаем только искажённое и пропущенное."""
+    return sum(op != "ok" and not (partial and op == "ins") for op, *_ in ops) / max(ref_len, 1)
 
 
 def stem(p: Path) -> str:
@@ -65,7 +67,7 @@ def meta(d: Path) -> dict:
         return {"runs": []}
 
 
-def add(video: Path, subs: Path) -> Path:
+def add(video: Path, subs: Path, partial: bool = False) -> Path:
     """Новый эталон: звук и расшифровка. Тот же ролик ещё раз — заменяет старый."""
     cues = read_srt(subs)
     if not cues:
@@ -76,7 +78,7 @@ def add(video: Path, subs: Path) -> Path:
     asyncio.run(media.extract_audio(video, d / "audio.wav"))
     write_srt(cues, d / "ref.ru.srt")
     (d / "meta.json").write_text(json.dumps({"source": str(video), "added": str(date.today()),
-                                             "minutes": round(cues[-1].end / 60, 1), "runs": []},
+                                             "minutes": round(cues[-1].end / 60, 1), "partial": partial, "runs": []},
                                             ensure_ascii=False, indent=1), encoding="utf-8")
     return d
 
@@ -92,10 +94,12 @@ def check(d: Path) -> dict:
     write_srt(cues, d / "hyp.ru.srt")
     ref_w, hyp_w = norm(" ".join(c.text for c in ref)), norm(" ".join(c.text for c in cues))
     ops = align(ref_w, hyp_w)
-    run = {"date": str(date.today()), "model": config.WHISPER_MODEL.split("/")[-1],
-           "wer": round(100 * wer(ops, len(ref_w)), 1),
-           "errors": Counter(f"{a or '∅'} → {b or '∅'}" for op, a, b in ops if op != "ok").most_common(8)}
     m = meta(d)
+    part = m.get("partial", False)
+    run = {"date": str(date.today()), "model": config.WHISPER_MODEL.split("/")[-1],
+           "wer": round(100 * wer(ops, len(ref_w), part), 1),
+           "errors": Counter(f"{a or '∅'} → {b or '∅'}" for op, a, b in ops
+                             if op != "ok" and not (part and op == "ins")).most_common(8)}
     m["runs"].append(run)
     (d / "meta.json").write_text(json.dumps(m, ensure_ascii=False, indent=1), encoding="utf-8")
     return run
@@ -123,7 +127,8 @@ def report() -> str:
         first, last = runs[0]["wer"], runs[-1]["wer"]
         trend = f"{first:>5}% → {last:>5}%" if len(runs) > 1 else f"{last:>5}%"
         errs = "; ".join(f"{e} ×{k}" if k > 1 else e for e, k in runs[-1]["errors"][:4])
-        rows.append(f"{d.name[:24]:<24} {m.get('minutes', 0):>5}  {trend}\n    {errs}")
+        rows.append(f"{d.name[:24]:<24} {m.get('minutes', 0):>5}  {trend}" + (" ≈ частичный" if m.get("partial") else "")
+                    + f"\n    {errs}")
     if not rows:
         return "Эталонов пока нет."
     return f"{'Эталон':<24} {'мин':>5}  ошибок в словах (WER)\n" + "\n".join(rows)
