@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import types
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable
 
-from . import config
+from . import config, media
 from .srt_utils import Cue, Word, words_to_cues
 
 log = logging.getLogger(__name__)
@@ -20,6 +21,34 @@ _model_lock = threading.Lock()
 _devnull = open(os.devnull, "w")
 # MLX привязывает GPU-stream к потоку, где создана модель: вся работа с ней — в одном потоке
 _mlx_thread = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mlx")
+
+# титры из обучающих данных Whisper: на тишине, музыке и шуме игры он «дописывает» их сам.
+# Первые никто не произносит; вторые говорят и вживую — их режем, только если модель сама не уверена, что это речь
+JUNK = re.compile(r"субтитр\w*\s+(сделал|создавал|подогнал|делал|подготовил|редактировал)|редактор субтитров"
+                  r"|корректор\s+[А-ЯЁ]\.|dimatorzok|продолжение следует", re.I)
+MAYBE_JUNK = re.compile(r"спасибо за просмотр|подписывайтесь на (наш )?канал|ставьте лайк", re.I)
+# пометки вместо речи: «СМЕХ», «[музыка]», «(аплодисменты)» — в субтитрах перевода они лишние
+SOUND = re.compile(r"^\W*(смех|музыка|аплодисменты|музыкальная заставка|непонятно)\W*$|^\s*[\[(*].*[\])*]\s*$", re.I)
+
+
+def junk(text: str, no_speech: float) -> bool:
+    w = re.findall(r"\w+", text.lower())
+    loop = len(w) >= 4 and len(set(w)) / len(w) <= 0.3   # «a! a! a! a!» — модель зациклилась на музыке
+    return bool(loop or JUNK.search(text) or SOUND.search(text) or (no_speech >= 0.5 and MAYBE_JUNK.search(text)))
+
+
+def missed(spans: list[list[float]], words: list[Word], gap: float = 1.0, least: float = 1.0) -> list[tuple[float, float]]:
+    """Где голос есть, а слов нет: Whisper иногда молча пропускает целое 30-секундное окно (на стриме
+    из 44 с речи осталось 20). Соседние куски ближе gap — один; меньше least секунд голоса — не берём."""
+    out: list[list[float]] = []
+    for a, b in spans:
+        if any(w.start < b + 0.3 and w.end > a - 0.3 for w in words):
+            continue
+        if out and a - out[-1][1] < gap:
+            out[-1][1:] = [b, out[-1][2] + b - a]
+        else:
+            out.append([a, b, b - a])
+    return [(max(0.0, a - 0.3), b + 0.3) for a, b, voiced in out if voiced >= least]
 
 
 def local_path(repo: str, patterns: list[str] | None = None) -> str:
@@ -136,10 +165,8 @@ def _transcribe_mlx(audio, on_progress, hint) -> list[Word]:
 
     with wave.open(str(audio)) as w:
         pcm = np.frombuffer(w.readframes(w.getnframes()), np.int16).astype(np.float32) / 32768.0
-    res = mt.transcribe(
-        pcm,
+    kw = dict(
         path_or_hf_repo=_path,               # тот же путь, что в _load: ModelHolder не грузит заново
-        verbose=False,                       # False = включить tqdm (None его выключает)
         language=config.SOURCE_LANG,
         task="transcribe",
         word_timestamps=True,
@@ -147,12 +174,25 @@ def _transcribe_mlx(audio, on_progress, hint) -> list[Word]:
         initial_prompt=hint or None,         # имена/термины помогают распознаванию
         hallucination_silence_threshold=2.0,  # VAD нет — режем «галлюцинации» на тишине так
     )
+    words = _words(mt.transcribe(pcm, verbose=False, **kw)["segments"])   # False = включить tqdm
+    # второй проход: куски с голосом, где слов нет, — каждый отдельно, со своим окном
+    for a, b in missed(media.speech_spans(audio), words):
+        found = _words(mt.transcribe(pcm[int(a * 16000):int(b * 16000)], verbose=None, **kw)["segments"], a)
+        log.info("Второй проход %.1f–%.1f с: %s", a, b, " ".join(w.text.strip() for w in found) or "—")
+        words += found
+    return sorted(words, key=lambda w: w.start)
+
+
+def _words(segments, offset: float = 0.0) -> list[Word]:
     words: list[Word] = []
-    for seg in res["segments"]:
-        if seg.get("words"):
-            words.extend(Word(w["start"], w["end"], w["word"], w.get("probability", 1.0)) for w in seg["words"])
+    for seg in segments:
+        if junk(seg["text"], seg.get("no_speech_prob", 0)):
+            log.info("Выкинул галлюцинацию: %s", seg["text"].strip())
+        elif seg.get("words"):
+            words.extend(Word(w["start"] + offset, w["end"] + offset, w["word"], w.get("probability", 1.0))
+                         for w in seg["words"])
         elif seg["text"].strip():
-            words.append(Word(seg["start"], seg["end"], seg["text"]))
+            words.append(Word(seg["start"] + offset, seg["end"] + offset, seg["text"]))
     return words
 
 
@@ -171,6 +211,8 @@ def _transcribe_faster(audio, on_progress, hint) -> list[Word]:
     duration = info.duration or 1.0
     words: list[Word] = []
     for seg in segments:
+        if junk(seg.text, seg.no_speech_prob):
+            continue
         if seg.words:
             words.extend(Word(w.start, w.end, w.word, w.probability) for w in seg.words)
         else:

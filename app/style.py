@@ -30,7 +30,7 @@ FORMATS = ("9:16", "1:1", "16:9")
 # y — низ текста, % высоты от верха, своя для каждого формата; words — сколько слов на экране (0 — вся реплика);
 # highlight — цвет текущего слова; karaoke — слово заливается по мере речи
 BASE = {"font": "Montserrat Bold", "size": 5.2, "color": "#FFFFFF", "outline": 9, "outline_color": "#000000",
-        "shadow": 0, "box": False, "box_color": "#000000", "box_opacity": 60, "upper": False, "words": 0,
+        "shadow": 0, "box": False, "box_color": "#000000", "box_opacity": 60, "upper": False, "lower": False, "words": 0,
         "highlight": None, "karaoke": False, "bilingual": False, "x": 50,
         "y": {"9:16": 74, "1:1": 88, "16:9": 90}}
 BUILTIN = {
@@ -41,6 +41,9 @@ BUILTIN = {
     "minimal": {"name": "Минимал", "font": "Inter Medium", "size": 4.6, "outline": 0, "shadow": 6},
     "karaoke": {"name": "Караоке", "font": "Rubik Bold", "size": 5.6, "karaoke": True, "highlight": "#FFD400"},
     "bilingual": {"name": "Двуязычный", "font": "Inter Bold", "size": 4.8, "bilingual": True},
+    # снят с готовых роликов кофейни: тонкий белый строчными, 2–3 слова, в верхней трети
+    "light": {"name": "Лёгкий сверху", "font": "Inter Regular", "size": 6.5, "outline": 0, "shadow": 4, "lower": True,
+              "words": 3, "y": {"9:16": 18, "1:1": 20, "16:9": 18}},
 }
 DEFAULTS = {"9:16": "reels", "1:1": "classic", "16:9": "classic"}
 USER_FILE = config.DATA / "presets.json"
@@ -149,7 +152,7 @@ def build_ass(cues: list[dict], style: dict, w: int, h: int, speech: list | None
     short = min(w, h)
     size = round(short * s["size"] / 100)
     font, bold, _ = FONTS.get(s["font"], FONTS["Montserrat Bold"])
-    upper = (lambda t: t.upper()) if s["upper"] else (lambda t: t)
+    upper = str.upper if s["upper"] else str.lower if s.get("lower") else (lambda t: t)
     # сколько знаков влезает в строку: средняя ширина знака ~0,56 кегля, у капса ~0,68
     fit = int(0.9 * w / (size * (0.68 if s["upper"] else 0.56)))
     width = max(8, min(42, fit))
