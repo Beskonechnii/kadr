@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -17,13 +18,14 @@ from AppKit import (NSAlert, NSApplication, NSBezierPath, NSBox, NSButton, NSCol
                     NSForegroundColorAttributeName, NSImage, NSImageSymbolConfiguration, NSLevelIndicator,
                     NSMakeRect,
                     NSMenu, NSMenuItem, NSOpenPanel, NSPasteboardTypeFileURL,
-                    NSPasteboardURLReadingFileURLsOnlyKey, NSPopUpButton, NSProgressIndicator, NSScrollView,
+                    NSPasteboardURLReadingFileURLsOnlyKey, NSPopUpButton, NSProgressIndicator, NSScrollView, NSSegmentedControl,
                     NSSecureTextField, NSTextField, NSTextView, NSView, NSWindow)
 from Foundation import NSURL, NSAttributedString, NSBundle, NSInsetRect, NSObject, NSTimer
 from PyObjCTools import AppHelper
 
 from . import __version__, config, hardware, project, runner, train, transcribe, translate_local, update, watch
 from .hardware import pressure
+from .srt_utils import write_srt
 from .transcribe import get_model, release
 
 log = logging.getLogger("kadr")
@@ -302,20 +304,24 @@ class AppDelegate(NSObject):
     # ---------- окно ----------
 
     def build_window(self):
-        W, H = 520, 480
+        W, H = 600, 480
         self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             NSMakeRect(0, 0, W, H), 1 | 2 | 4, 2, False)   # titled | closable | miniaturizable
         self.window.setTitle_(f"{config.APP_NAME} {__version__}" + ("" if config.FROZEN else " — dev"))
         self.window.setReleasedWhenClosed_(False)
-        self.window.center()
-        v = self.window.contentView()
+        # развилка в начале: сделать субтитры или учить распознавание — у каждого режима свой вид
+        self.seg = NSSegmentedControl.segmentedControlWithLabels_trackingMode_target_action_(
+            ["Сделать субтитры", "Обучение модели"], 0, self, "switchMode:")
+        self.seg.setSelectedSegment_(0)
+        self.tr = Training.alloc().init()
+        v = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, W, H))
+        self.views = [v, self.tr.view]
 
         v.addSubview_(DropView.alloc().initWithFrame_(NSMakeRect(20, 260, W - 40, 200)))
         # появляется, когда в GitHub Releases есть версия новее; окно подрастает на строку
         self.update_btn = NSButton.buttonWithTitle_target_action_("", self, "installUpdate:")
-        self.update_btn.setFrame_(NSMakeRect(20, H + 6, W - 40, 28))
         self.update_btn.setHidden_(True)
-        self.size = (W, H)
+        self.W = W
 
         self.state = label("", NSMakeRect(20, 226, W - 40, 20))
         self.progress = NSProgressIndicator.alloc().initWithFrame_(NSMakeRect(20, 208, W - 40, 12))
@@ -368,9 +374,36 @@ class AppDelegate(NSObject):
                   label("Перевод:", NSMakeRect(20, 101, 70, 18), color=gray), self.translator, self.burn,
                   label("Нагрузка:", NSMakeRect(20, 67, 70, 18), color=gray), self.effort,
                   label("Сейчас:", NSMakeRect(20, 33, 70, 18), color=gray), self.meter, self.load,
-                  self.models, self.update_btn):
+                  self.models):
             v.addSubview_(x)
+        for x in (*self.views, self.update_btn, self.seg):
+            self.window.contentView().addSubview_(x)
+        self.relayout()
+        self.window.center()
         self.window.makeKeyAndOrderFront_(None)
+
+    def relayout(self):
+        """Снизу вверх: вид режима, кнопка обновления (если есть), развилка. Окно меняет высоту, верх стоит."""
+        v = self.views[self.seg.selectedSegment()]
+        h, up, W = v.frame().size.height, 0 if self.update_btn.isHidden() else 40, self.W
+        for x in self.views:
+            x.setHidden_(x is not v)
+        self.update_btn.setFrame_(NSMakeRect(20, h + 6, W - 40, 28))
+        self.seg.sizeToFit()
+        sw = self.seg.frame().size.width
+        self.seg.setFrame_(NSMakeRect((W - sw) / 2, h + up + 10, sw, 28))
+        f = self.window.frame()
+        new = self.window.frameRectForContentRect_(NSMakeRect(0, 0, W, h + up + 48))
+        top = f.origin.y + f.size.height
+        self.window.setFrame_display_animate_(NSMakeRect(f.origin.x, top - new.size.height, new.size.width,
+                                                         new.size.height), True, self.window.isVisible())
+
+    def switchMode_(self, sender):
+        # не setMode: — так называется селектор NSMatrix с целым аргументом, PyObjC берёт его сигнатуру,
+        # и вместо контрола сюда приходит число
+        if sender.selectedSegment() == 1:
+            self.tr.show()
+        self.relayout()
 
     def tick_(self, timer):
         self.show_update()
@@ -406,9 +439,8 @@ class AppDelegate(NSObject):
             self.update_btn.setTitle_(status["update"])
         elif update.available and self.update_btn.isHidden():
             self.update_btn.setTitle_(f"Доступна версия {update.available[0]} — обновить")
-            W, H = self.size
-            self.window.setContentSize_((W, H + 40))
             self.update_btn.setHidden_(False)
+            self.relayout()
 
     def installUpdate_(self, sender):
         self.update_btn.setEnabled_(False)
@@ -665,16 +697,18 @@ class AppDelegate(NSObject):
         self.kb.show()
 
     def showTraining_(self, sender):
-        if not getattr(self, "tr", None):
-            self.tr = Training.alloc().init()
-        self.tr.show()
+        self.seg.setSelectedSegment_(1)
+        self.switchMode_(self.seg)
+        self.window.makeKeyAndOrderFront_(None)
 
 
 def text_area(frame) -> tuple[NSScrollView, NSTextView]:
     sv = NSScrollView.alloc().initWithFrame_(frame)
     sv.setHasVerticalScroller_(True)
     sv.setBorderType_(2)   # рамка как у поля ввода
-    tv = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, frame.size.width, frame.size.height))
+    # по видимой части, а не по кадру: шире неё — и первые буквы строк уезжают под рамку
+    w, h = sv.contentSize()
+    tv = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, w, h))
     tv.setAutoresizingMask_(2)
     tv.setRichText_(False)
     tv.setFont_(NSFont.systemFontOfSize_(13))
@@ -783,37 +817,32 @@ class Training(NSObject):
 
     def init(self):
         self = objc.super(Training, self).init()
-        W, H = 620, 600
+        W, H = 600, 540
         self.busy = False
-        self.window = w = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSMakeRect(0, 0, W, H), 1 | 2 | 4, 2, False)
-        w.setTitle_("Обучение")
-        w.setReleasedWhenClosed_(False)
-        v = w.contentView()
-        drop = DropView.alloc().initWithFrame_(NSMakeRect(20, 440, W - 40, 140))
+        self.view = v = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, W, H))
+        drop = DropView.alloc().initWithFrame_(NSMakeRect(20, 390, W - 40, 140))
         drop.on_drop = self.dropped
-        drop.texts = ("Перетащите видео и его ручные субтитры", ".srt или .vtt с тем же именем — с ними Kadr сравнит распознавание")
-        sv, self.table = text_area(NSMakeRect(20, 110, W - 40, 300))
+        drop.texts = ("Перетащите готовые ролики с субтитрами в кадре",
+                      "Kadr прочитает субтитры и сравнит с ними распознавание. Или видео вместе с его .srt")
+        sv, self.table = text_area(NSMakeRect(20, 104, W - 40, 256))
         self.table.setEditable_(False)
         self.table.setFont_(NSFont.monospacedSystemFontOfSize_weight_(12, 0))
         self.status = label("", NSMakeRect(20, 76, W - 40, 18), size=12, color=NSColor.secondaryLabelColor())
-        buttons = [("Проверить все", "checkAll:", 150), ("Расхождения → в замены", "toFixes:", 210),
-                   ("Папка эталонов", "openRefs:", 150)]
+        buttons = [("Проверить все", "checkAll:", 130), ("Расхождения → в замены", "toFixes:", 200),
+                   ("База знаний", "showKnowledge:", 120), ("Папка эталонов", "openRefs:", 130)]
         x = 14
         for title, action, width in buttons:
             b = NSButton.buttonWithTitle_target_action_(title, self, action)
             b.setFrame_(NSMakeRect(x, 24, width, 32))
             v.addSubview_(b)
             x += width
-        for x in (drop, sv, self.status, label("Эталоны и ошибки распознавания:", NSMakeRect(20, 414, W - 40, 18),
+        for x in (drop, sv, self.status, label("Эталоны и ошибки распознавания:", NSMakeRect(20, 364, W - 40, 18),
                                                 size=12, bold=True)):
             v.addSubview_(x)
-        w.center()
         return self
 
     def show(self):
         self.table.setString_(train.report())
-        self.window.makeKeyAndOrderFront_(None)
 
     @objc.python_method
     def say(self, text):
@@ -822,21 +851,33 @@ class Training(NSObject):
     @objc.python_method
     def dropped(self, paths):
         subs = {train.stem(p): p for p in paths if p.suffix.lower() in train.SUBS}
-        pairs = []
+        pairs, burned = [], []
         for v in (p for p in paths if p.suffix.lower() in runner.MEDIA_EXT):
-            s = subs.pop(train.stem(v), None) or next(iter(choose(
-                train.SUBS, many=False, title=f"Ручные русские субтитры к «{v.name}»")), None)
-            if s:
-                pairs.append((v, s))
+            s = subs.pop(train.stem(v), None)
+            pairs.append((v, s)) if s else burned.append(v)   # без .srt — читаем субтитры в кадре
         if subs:
             message("Субтитры без видео", "Перетащите вместе с ними видео: " + ", ".join(p.name for p in subs.values()))
-        if pairs:
-            self.work(lambda: [self._add(*p) for p in pairs])
+        if pairs or burned:
+            self.work(lambda: [self._add(*p) for p in pairs] + [self._burned(v) for v in burned])
 
     @objc.python_method
     def _add(self, video, subs):
         self.say(f"Сохраняю эталон {video.name}…")
         d = train.add(video, subs)
+        self._check(d)
+
+    @objc.python_method
+    def _burned(self, video):
+        """Готовый ролик: субтитры в кадре → частичный эталон (монтажёр подписал не каждую фразу)."""
+        from . import ocr   # Vision грузим, только когда нужен
+
+        self.say(f"Читаю субтитры в кадре {video.name}…")
+        cues = ocr.to_cues(ocr.frames_lines(video))
+        if len(cues) < ocr.MIN_CUES:
+            return self.say(f"{video.name}: субтитров в кадре не нашёл — перетащите видео вместе с его .srt")
+        with tempfile.TemporaryDirectory() as t:
+            write_srt(cues, Path(t) / "ref.ru.srt")
+            d = train.add(video, Path(t) / "ref.ru.srt", partial=True)
         self._check(d)
 
     @objc.python_method
@@ -870,6 +911,9 @@ class Training(NSObject):
         if not refs:
             return self.status.setStringValue_("Эталонов пока нет")
         self.work(lambda: [self._check(d) for d in refs])
+
+    def showKnowledge_(self, sender):
+        NSApplication.sharedApplication().delegate().showKnowledge_(sender)
 
     def toFixes_(self, sender):
         delegate = NSApplication.sharedApplication().delegate()

@@ -4,4 +4,4 @@ faster-whisper>=1.1; platform_machine != "arm64"
 anthropic>=0.40
 watchdog>=4
 python-dotenv>=1
-pyobjc-framework-Vision>=12; sys_platform == "darwin"   # tools/ocr_subs.py: вшитые субтитры → эталон
+pyobjc-framework-Vision>=12; sys_platform == "darwin"   # app/ocr.py: субтитры в кадре → эталон

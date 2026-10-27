@@ -2,8 +2,10 @@
 Кадры 4 раза в секунду, текст — macOS Vision. Титр отличаем от надписей в кадре не по месту (в роликах он
 стоит где угодно), а по поведению: кириллица, держится секунды, а не весь ролик.
 
-    .venv/bin/python tools/ocr_subs.py <видео…> --out dev/ocr
-    .venv/bin/python tools/ocr_subs.py <видео…> --ref     # сразу в эталоны «Обучения» (частичные)
+В приложении — окно «Обучение»: готовый ролик без .srt рядом. Из консоли:
+
+    .venv/bin/python -m app.ocr <видео…> --out dev/ocr
+    .venv/bin/python -m app.ocr <видео…> --ref     # сразу в эталоны «Обучения» (частичные)
 """
 from __future__ import annotations
 
@@ -12,7 +14,6 @@ import difflib
 import json
 import re
 import subprocess
-import sys
 import tempfile
 from collections import Counter
 from pathlib import Path
@@ -20,9 +21,8 @@ from pathlib import Path
 import Vision
 from Foundation import NSURL
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from app import config, train  # noqa: E402
-from app.srt_utils import Cue, write_srt  # noqa: E402
+from . import config, train
+from .srt_utils import Cue, write_srt
 
 FPS = 4
 MAX_HOLD = 7.0     # дольше на экране — надпись в кадре, а не титр
