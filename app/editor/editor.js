@@ -290,7 +290,10 @@ function renderList() {
     ru.value = c.ru || ''
     en.oninput = () => { c.en = en.value; grow(en); el.check(); label(i); changed(); bar() }
     ru.oninput = () => { c.ru = ru.value; c.stale = true; grow(ru); el.check(); changed(); bar() }
-    for (const ta of [en, ru]) ta.onfocus = () => select(i, true)
+    for (const ta of [en, ru]) {
+      ta.onfocus = () => { select(i, true); ta.was = ta.value }
+      ta.onchange = () => offer(ta.was, ta.value, i)
+    }
     list.append(el)
     el.check()
   })
@@ -421,6 +424,29 @@ $('replall').onclick = async () => {
   $('find').value = ''
   rerender(Math.max(sel, 0))
   status(`Заменено в ${n} репл.` + ($('remember').checked ? ' · запомнено для новых видео' : ''))
+}
+// что правка поменяла в тексте: одно место до трёх слов, как word_fixes в srt_utils; короткое «было» не берём —
+// замена подстрокой, «и → а» испортило бы весь текст
+function wordFix(was, now) {
+  const a = was.match(/[\p{L}\d-]+/gu) || [], b = now.match(/[\p{L}\d-]+/gu) || [], lo = s => s.toLowerCase()
+  let i = 0, j = 0
+  while (i < a.length && i < b.length && lo(a[i]) === lo(b[i])) i++
+  while (j < a.length - i && j < b.length - i && lo(a.at(-1 - j)) === lo(b.at(-1 - j))) j++
+  const x = a.slice(i, a.length - j), y = b.slice(i, b.length - j)
+  return x.length && y.length && x.length <= 3 && y.length <= 3 && x.join(' ').length >= 4
+    && lo(x.join(' ')) !== lo(y.join(' ')) ? [x.join(' '), y.join(' ')] : null
+}
+// поправил слово в одной реплике — предложить то же в остальных: имя или термин Whisper путает не один раз
+function offer(was, now, i) {
+  const f = wordFix(was || '', now), rx = f && new RegExp(esc(f[0]), 'i')
+  const n = rx ? proj.cues.filter((c, k) => k !== i && (rx.test(c.en) || rx.test(c.ru || ''))).length : 0
+  $('offer').hidden = !n
+  if (!n) return
+  $('offer').textContent = `«${f[0]}» → «${f[1]}» ещё в ${n} репл.`
+  $('offer').onclick = () => {
+    $('find').value = f[0]; $('repl').value = f[1]; $('offer').hidden = true
+    bar(); $('replall').focus()
+  }
 }
 $('retrall').onclick = async () => {
   $('retrall').disabled = true
@@ -684,6 +710,15 @@ $('rebuild').onclick = async () => {
   await call('rebuild', { proj })
 }
 window.onRebuild = (state, text) => {
+  if (state === 'soft') {
+    // превью обычно играет этот же файл, а байты в нём уже другие — перечитать с того же места
+    if (init.video) {
+      const t = v.currentTime
+      v.addEventListener('loadedmetadata', () => { v.currentTime = t }, { once: true })
+      v.src = 'kadr://video/clip'
+    }
+    return status(`Дорожки субтитров обновлены: ${text}. Прожигаю…`)
+  }
   $('rebuild').disabled = false
   status(state === 'done' ? `Готово: ${text}` : `Ошибка: ${text}`)
 }

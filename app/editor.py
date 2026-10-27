@@ -158,19 +158,26 @@ class Session:
 
     def _rebuild(self):
         d, proj = self.pj.parent, self.proj
+        f = proj["files"]
         try:
-            src = project.video(d, proj) or d / (proj["files"].get("soft") or "-")
+            src = project.video(d, proj) or d / (f.get("soft") or "-")
             if not src.is_file():
                 raise RuntimeError("Не нашёл исходное видео")
-            dst = d / (proj["files"].get("burned") or f"{self.pj.stem}-en.mp4")
+            dst = d / (f.get("burned") or f"{self.pj.stem}-en.mp4")
             ass, tmp = d / ".kadr-rebuild.ass", d / f".kadr-rebuild{dst.suffix}"
             ass.write_text(project.ass(proj, cut=True), encoding="utf-8")
             try:
+                # копия с отключаемыми дорожками — из SRT после правок, иначе в QuickTime остаются старые субтитры;
+                # без вырезок: -c copy режет только по ключевым кадрам, а SRT — в исходном времени
+                if f.get("soft") and f.get("en_srt") and f.get("ru_srt"):
+                    soft = asyncio.run(media.mux_soft_subs(src, d / f["en_srt"], d / f["ru_srt"], d / ".kadr-rebuild-soft"))
+                    shutil.move(soft, d / f["soft"])
+                    self._notify("soft", f["soft"])
                 asyncio.run(media.burn_subs(src, ass, tmp, project.kept(proj) if project.cuts(proj) else None))
                 shutil.move(tmp, dst)   # подменяем готовый файл только целиком
             finally:
-                ass.unlink(missing_ok=True)
-                tmp.unlink(missing_ok=True)
+                for p in d.glob(".kadr-rebuild*"):
+                    p.unlink(missing_ok=True)
             self._notify("done", dst.name)
         except Exception as e:
             log.exception("Редактор: пересборка не удалась")
