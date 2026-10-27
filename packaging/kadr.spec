@@ -22,7 +22,7 @@ a = Analysis(
     pathex=[str(HERE.parent)],
     binaries=binaries,
     datas=datas,
-    hiddenimports=hidden + ["keyring.backends.macOS", "UserNotifications", "ServiceManagement", "WebKit",
+    hiddenimports=hidden + ["keyring.backends.macOS", "UserNotifications", "ServiceManagement", "WebKit", "Vision",
                             "mlx_whisper.transcribe"],
     excludes=["torch", "tkinter", "matplotlib", "IPython", "dotenv", "faster_whisper",
               "tensorflow", "jax", "flax"],
