@@ -18,7 +18,7 @@ from Foundation import NSData, NSHTTPURLResponse, NSObject, NSURL, NSURLRequest
 from PyObjCTools import AppHelper
 from WebKit import WKContentWorld, WKUserScript, WKWebView, WKWebViewConfiguration
 
-from . import config, media, project, style
+from . import config, media, project, style, train
 from .srt_utils import Cue
 
 log = logging.getLogger(__name__)
@@ -89,7 +89,7 @@ class Scheme(NSObject, protocols=[objc.protocolNamed("WKURLSchemeHandler")]):
 
 class Session:
     """Открытый проект и команды страницы: cmd_<имя>(**данные) → ответ, который уйдёт в JS как JSON."""
-    SLOW = {"retranslate"}   # ждут модель или сеть — в отдельном потоке, окно не замирает
+    SLOW = {"retranslate", "to_refs"}   # ждут модель или сеть — в отдельном потоке, окно не замирает
 
     def __init__(self, pj: Path):
         self.pj = pj
@@ -144,6 +144,17 @@ class Session:
         """«Запомнить» замену: дальше её делает сам конвейер после распознавания и перевода."""
         config.FIXES.write_text(json.dumps({**config.fixes(), find: repl}, ensure_ascii=False, indent=1), encoding="utf-8")
         return True
+
+    def cmd_to_refs(self, proj=None):
+        """Поправленный ролик — в эталоны: «Обучение модели» проверит на нём распознавание."""
+        self.cmd_save(proj)
+        d, f = self.pj.parent, self.proj["files"]
+        v = project.video(d, self.proj)
+        if not (v and f.get("ru_srt")):
+            raise RuntimeError("Нет видео или русских субтитров")
+        name = train.stem(Path(f.get("source") or v))
+        train.add(v, d / f["ru_srt"], name=name)
+        return name
 
     def cmd_reveal(self):
         f = self.pj.parent / (self.proj["files"].get("burned") or "")

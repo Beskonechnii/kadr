@@ -67,12 +67,12 @@ def meta(d: Path) -> dict:
         return {"runs": []}
 
 
-def add(video: Path, subs: Path, partial: bool = False) -> Path:
+def add(video: Path, subs: Path, partial: bool = False, name: str | None = None) -> Path:
     """Новый эталон: звук и расшифровка. Тот же ролик ещё раз — заменяет старый."""
     cues = read_srt(subs)
     if not cues:
         raise RuntimeError(f"Не прочитал субтитры {subs.name}")
-    d = REFS / stem(video)
+    d = REFS / (name or stem(video))
     shutil.rmtree(d, ignore_errors=True)
     d.mkdir(parents=True)
     asyncio.run(media.extract_audio(video, d / "audio.wav"))

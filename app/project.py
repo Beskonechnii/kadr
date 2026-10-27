@@ -117,6 +117,28 @@ def learned(dirs, known: dict[str, str]) -> list[tuple[str, str, int]]:
     return [(a, b, k) for (a, b), k in n.most_common()]
 
 
+def index(dirs) -> list[tuple[Path, Path]]:
+    """(папка проекта, исходник) по всем проектам в dirs, недавние первыми."""
+    out = []
+    for p in sorted((p for d in dirs if d.exists() for p in d.glob("*/" + FILE)),
+                    key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            out.append((p.parent, Path(load(p)["files"].get("source") or p.parent.name)))
+        except (OSError, ValueError):
+            pass
+    return out
+
+
+def made(src: Path, idx) -> Path | None:
+    """Где этот файл уже обработан. По имени и размеру: исходник из «Входящих» переезжает в папку проекта,
+    а по пути из «Входящих» позже может прийти другой ролик с тем же именем."""
+    for d, s in idx:
+        copy = s if s.is_file() else d / s.name
+        if s.name == src.name and copy.is_file() and copy.stat().st_size == src.stat().st_size:
+            return d
+    return None
+
+
 def save(pj: Path, proj: dict):
     """pj — сам файл проекта; остальные файлы — по именам рядом с ним."""
     d = pj.parent
