@@ -723,6 +723,12 @@ window.onRebuild = (state, text) => {
   status(state === 'done' ? `Готово: ${text}` : `Ошибка: ${text}`)
 }
 $('reveal').onclick = () => call('reveal')
+$('toref').onclick = async () => {
+  clearTimeout(saveT)
+  status('Сохраняю эталон…')
+  try { status(`В эталонах: ${await call('to_refs', { proj })} — проверка в «Обучении модели»`) }
+  catch (e) { status(`Ошибка: ${e.message || e}`) }
+}
 
 $('add').onclick = insert
 const inField = () => /TEXTAREA|INPUT|SELECT/.test(document.activeElement.tagName)

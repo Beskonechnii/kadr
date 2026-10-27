@@ -166,8 +166,19 @@ def choose(exts, many: bool = True, title: str = "") -> list[Path]:
 
 
 def pick_files(learn: bool = False):
-    for p in choose(runner.MEDIA_EXT if learn else runner.SUPPORTED_EXT):
-        watch.enqueue(p, anywhere=True, learn=learn)
+    submit(choose(runner.MEDIA_EXT if learn else runner.SUPPORTED_EXT), learn)
+
+
+def submit(paths, learn: bool = False):
+    """В очередь. Файл, который уже делали, — предложить открыть готовый проект, а не гонять модели заново."""
+    idx = [] if learn else project.index((config.DONE,))
+    for p in paths:
+        d = project.made(p, idx) if p.suffix.lower() in runner.MEDIA_EXT else None
+        if d and choice(f"{p.name} уже готов — {d.name}", "Открыть готовый в редакторе или распознать заново?",
+                        "Открыть", "Распознать заново"):
+            NSApplication.sharedApplication().delegate().open_editor(d)
+        else:
+            watch.enqueue(p, anywhere=True, learn=learn)
 
 
 def message(title: str, text: str):
@@ -175,6 +186,15 @@ def message(title: str, text: str):
     a.setMessageText_(title)
     a.setInformativeText_(text)
     a.runModal()
+
+
+def choice(title: str, text: str, yes: str, no: str) -> bool:
+    a = NSAlert.alloc().init()
+    a.setMessageText_(title)
+    a.setInformativeText_(text)
+    a.addButtonWithTitle_(yes)
+    a.addButtonWithTitle_(no)
+    return a.runModal() == 1000
 
 
 def ask(title: str, message: str, default: str = "", secure: bool = False) -> str | None:
@@ -225,11 +245,9 @@ class DropView(NSView):
     def performDragOperation_(self, sender):
         urls = sender.draggingPasteboard().readObjectsForClasses_options_(
             [NSURL], {NSPasteboardURLReadingFileURLsOnlyKey: True}) or []
-        if self.on_drop:
-            self.on_drop([Path(u.path()) for u in urls])
-        for u in urls if not self.on_drop else ():
-            watch.enqueue(Path(u.path()), anywhere=True, learn=self.learn)
         self._set_hover(False)
+        # после возврата: модальный вопрос «уже готов» посреди перетаскивания подвешивает Finder
+        AppHelper.callAfter(self.on_drop or (lambda ps: submit(ps, self.learn)), [Path(u.path()) for u in urls])
         return True
 
     def mouseDown_(self, event):
@@ -288,11 +306,11 @@ class AppDelegate(NSObject):
     def application_openFiles_(self, app, filenames):
         """Файлы, брошенные на иконку в Dock/Finder или открытые через Quick Action (open -b).
         Файл проекта или папка project-n — в редактор."""
-        for f in map(Path, filenames):
+        files = list(map(Path, filenames))
+        for f in files:
             if f.is_dir() or f.name.endswith(project.FILE):
                 self.open_editor(f)
-            else:
-                watch.enqueue(f, anywhere=True)
+        submit([f for f in files if not (f.is_dir() or f.name.endswith(project.FILE))])
 
     def applicationShouldHandleReopen_hasVisibleWindows_(self, app, visible):
         self.window.makeKeyAndOrderFront_(None)   # клик по значку в Dock возвращает окно
@@ -328,7 +346,9 @@ class AppDelegate(NSObject):
         self.progress.setStyle_(0)   # полоска
         self.progress.setMinValue_(0)
         self.progress.setMaxValue_(100)
-        self.result = label("", NSMakeRect(20, 168, W - 300, 20), color=NSColor.secondaryLabelColor())
+        self.recent = NSPopUpButton.alloc().initWithFrame_pullsDown_(NSMakeRect(18, 163, W - 304, 26), False)
+        self.recent.setToolTip_("Последние результаты — выберите и откройте в редакторе или Finder")
+        self.shown = None
         self.edit = NSButton.buttonWithTitle_target_action_("Редактор", self, "editLast:")
         self.edit.setFrame_(NSMakeRect(W - 280, 160, 106, 32))
         self.edit.setHidden_(True)
@@ -370,7 +390,7 @@ class AppDelegate(NSObject):
         self._cpu = (time.monotonic(), usage()[1])
 
         gray = NSColor.secondaryLabelColor()
-        for x in (self.state, self.progress, self.result, self.edit, self.reveal, sep,
+        for x in (self.state, self.progress, self.recent, self.edit, self.reveal, sep,
                   label("Перевод:", NSMakeRect(20, 101, 70, 18), color=gray), self.translator, self.burn,
                   label("Нагрузка:", NSMakeRect(20, 67, 70, 18), color=gray), self.effort,
                   label("Сейчас:", NSMakeRect(20, 33, 70, 18), color=gray), self.meter, self.load,
@@ -378,6 +398,7 @@ class AppDelegate(NSObject):
             v.addSubview_(x)
         for x in (*self.views, self.update_btn, self.seg):
             self.window.contentView().addSubview_(x)
+        self.fill_recent()
         self.relayout()
         self.window.center()
         self.window.makeKeyAndOrderFront_(None)
@@ -427,12 +448,19 @@ class AppDelegate(NSObject):
             self.progress.stopAnimation_(None)
         self.progress.setHidden_(not (status["busy"] or text.startswith("Загружаю")))
         self.show_load()
-        last = status["last"]
-        if last:
-            self.result.setStringValue_(f"Готово: {last.name}")
-            self.reveal.setHidden_(False)
-            # старые проекты (до 1.2) без project.json тоже открываются — по SRT
-            self.edit.setHidden_(not (project.locate(last).exists() or any(last.glob("*en.srt"))))
+        if status["last"] != self.shown:
+            self.shown = status["last"]
+            self.fill_recent()
+
+    def fill_recent(self):
+        """Последние результаты по имени исходника: «project-11» ни о чём не говорит."""
+        idx = project.index((config.DONE, config.KNOWLEDGE))[:15]
+        self.recent_dirs = [d for d, _ in idx]
+        self.recent.removeAllItems()
+        for d, s in idx:   # номера project-n в «Базе знаний» свои — без пометки названия совпадут
+            self.recent.addItemWithTitle_(f"{s.name} — {d.name}" + (" · база знаний" if d.parent == config.KNOWLEDGE else ""))
+        for x in (self.recent, self.edit, self.reveal):
+            x.setHidden_(not idx)
 
     def show_update(self):
         if status["update"]:
@@ -488,15 +516,12 @@ class AppDelegate(NSObject):
                                     + f" · память Mac {PRESSURE.get(pressure(), 'в норме')}")
 
     def revealLast_(self, sender):
-        last = status["last"]
-        if not last:
-            return
+        last = self.recent_dirs[self.recent.indexOfSelectedItem()]
         main = next(last.glob("video-*-en.mp4"), None) or next(last.glob("subs-*-en.srt"), None)
         subprocess.run(["open", "-R", str(main)] if main else ["open", str(last)])
 
     def editLast_(self, sender):
-        if status["last"]:
-            self.open_editor(status["last"])
+        self.open_editor(self.recent_dirs[self.recent.indexOfSelectedItem()])
 
     def openProject_(self, sender):
         """Папка project-n или файл проекта — например, чтобы поправить старый результат."""
