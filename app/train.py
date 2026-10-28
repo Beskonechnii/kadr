@@ -116,6 +116,34 @@ def suggestions(known: dict[str, str]) -> list[tuple[str, str, int]]:
     return [(a, b, k) for (a, b), k in n.most_common()]
 
 
+def words(d: Path) -> int:
+    return len(norm(" ".join(c.text for c in read_srt(d / "ref.ru.srt"))))
+
+
+def summary() -> dict:
+    """Итог по всем эталонам: доля ошибок по словам (длинный эталон весит больше) и сдвиг с прошлой проверки
+    — только по эталонам, проверенным дважды, иначе сравнение с другим набором."""
+    done = [(d, meta(d)["runs"], words(d)) for d in refs()]
+    done = [x for x in done if x[1]]
+    n = sum(w for *_, w in done)
+    twice = [(r, w) for _, r, w in done if len(r) > 1]
+    k = sum(w for _, w in twice)
+    return {"refs": len(refs()), "minutes": round(sum(meta(d).get("minutes", 0) for d in refs())),
+            "wer": round(sum(r[-1]["wer"] * w for _, r, w in done) / n, 1) if n else None,
+            "delta": round(sum((r[-1]["wer"] - r[-2]["wer"]) * w for r, w in twice) / k, 1) if k else None}
+
+
+def rows() -> list[tuple[str, str, str]]:
+    """Таблица: ролик, ошибок, что чаще всего путает. Пропуски («слово → ∅») не показываем:
+    в частичном эталоне это чаще надпись, которую никто не говорил, — путаница слов полезнее."""
+    out = []
+    for d in refs():
+        runs = meta(d)["runs"]
+        errs = [f"{e} ×{k}" if k > 1 else e for e, k in (runs[-1]["errors"] if runs else []) if "∅" not in e]
+        out.append((d.name, f"{runs[-1]['wer']}%" if runs else "—", "; ".join(errs[:3]) or ("только пропуски" if runs else "ещё не проверен")))
+    return sorted(out, key=lambda r: -float(r[1][:-1]) if r[1] != "—" else 0)
+
+
 def report() -> str:
     """Таблица эталонов: WER первой и последней проверки и частые ошибки последней."""
     rows = []
