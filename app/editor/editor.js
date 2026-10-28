@@ -726,8 +726,12 @@ $('reveal').onclick = () => call('reveal')
 $('toref').onclick = async () => {
   clearTimeout(saveT)
   status('Сохраняю эталон…')
-  try { status(`В эталонах: ${await call('to_refs', { proj })} — проверка в «Обучении модели»`) }
-  catch (e) { status(`Ошибка: ${e.message || e}`) }
+  try {
+    const name = await call('to_refs', { proj, sure: $('toref').sure })
+    $('toref').sure = !name
+    status(name ? `В эталонах: ${name} — проверка в «Обучении модели»`
+      : 'Русский текст не правили — эталоном станет сам Whisper. Вычитано? Нажмите «В эталоны» ещё раз')
+  } catch (e) { status(`Ошибка: ${e.message || e}`) }
 }
 
 $('add').onclick = insert

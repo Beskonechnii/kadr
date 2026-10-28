@@ -145,9 +145,14 @@ class Session:
         config.FIXES.write_text(json.dumps({**config.fixes(), find: repl}, ensure_ascii=False, indent=1), encoding="utf-8")
         return True
 
-    def cmd_to_refs(self, proj=None):
-        """Поправленный ролик — в эталоны: «Обучение модели» проверит на нём распознавание."""
+    def cmd_to_refs(self, proj=None, sure=False):
+        """Поправленный ролик — в эталоны: «Обучение модели» проверит на нём распознавание.
+        None — русский не правили: переспросить."""
         self.cmd_save(proj)
+        # невычитанный текст — это сам Whisper: проверка покажет ~0% ошибок и ничему не научит
+        if not sure and all(train.norm(" ".join(w[2] for w in c.get("words") or [])) == train.norm(c.get("ru") or "")
+                            for c in self.proj["cues"]):
+            return None
         d, f = self.pj.parent, self.proj["files"]
         v = project.video(d, self.proj)
         if not (v and f.get("ru_srt")):
