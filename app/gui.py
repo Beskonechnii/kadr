@@ -19,7 +19,7 @@ from AppKit import (NSAlert, NSApplication, NSBezierPath, NSBox, NSButton, NSCol
                     NSMakeRect,
                     NSMenu, NSMenuItem, NSOpenPanel, NSPasteboardTypeFileURL,
                     NSPasteboardURLReadingFileURLsOnlyKey, NSPopUpButton, NSProgressIndicator, NSScrollView, NSSegmentedControl,
-                    NSSecureTextField, NSTextField, NSTextView, NSView, NSWindow)
+                    NSSecureTextField, NSTableColumn, NSTableView, NSTextField, NSTextView, NSView, NSWindow)
 from Foundation import NSURL, NSAttributedString, NSBundle, NSInsetRect, NSObject, NSTimer
 from PyObjCTools import AppHelper
 
@@ -329,7 +329,7 @@ class AppDelegate(NSObject):
         self.window.setReleasedWhenClosed_(False)
         # развилка в начале: сделать субтитры или учить распознавание — у каждого режима свой вид
         self.seg = NSSegmentedControl.segmentedControlWithLabels_trackingMode_target_action_(
-            ["Сделать субтитры", "Обучение модели"], 0, self, "switchMode:")
+            ["Сделать субтитры", "Точность"], 0, self, "switchMode:")
         self.seg.setSelectedSegment_(0)
         self.tr = Training.alloc().init()
         v = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, W, H))
@@ -613,7 +613,7 @@ class AppDelegate(NSObject):
             ("Выбрать видео…", "pickFiles:", "o"),
             ("Открыть в редакторе…", "openProject:", "e"),
             ("База знаний", "showKnowledge:", "k"),
-            ("Обучение", "showTraining:", "l"),
+            ("Точность", "showTraining:", "l"),
             ("Открыть «Входящие»", "openInbox:", ""),
             ("Открыть «Готово»", "openDone:", ""),
             None,
@@ -834,40 +834,86 @@ class Knowledge(NSObject):
         config.GLOBAL_CONTEXT.write_text(self.gloss.string().strip(), encoding="utf-8")
         config.FIXES.write_text(json.dumps(fixes, ensure_ascii=False, indent=1), encoding="utf-8")
         self.status.setStringValue_(f"Сохранено: замен {len(fixes)}")
+        NSApplication.sharedApplication().delegate().tr.show()   # «Точность» показывает, что сейчас влияет
 
 
-class Training(NSObject):
-    """Обучение по эталонам: видео + ручные субтитры → WER распознавания и замены из расхождений.
-    «Проверить все» после новых замен или словаря показывает, стало ли лучше."""
+class Training(NSObject, protocols=[objc.protocolNamed("NSTableViewDataSource")]):
+    """«Точность»: сверху — что влияет на каждое новое видео (замены, словарь, фильтры), ниже — замер на эталонах.
+    Эталоны модель не учат: Kadr распознаёт их заново и сравнивает с текстом — видно, помогли ли замены и словарь."""
 
     def init(self):
         self = objc.super(Training, self).init()
-        W, H = 600, 540
-        self.busy = False
+        W, H = 600, 640
+        self.busy, self.rows = False, []
         self.view = v = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, W, H))
-        drop = DropView.alloc().initWithFrame_(NSMakeRect(20, 390, W - 40, 140))
+        gray = NSColor.secondaryLabelColor()
+        drop = DropView.alloc().initWithFrame_(NSMakeRect(20, 494, W - 40, 136))
         drop.on_drop = self.dropped
-        drop.texts = ("Перетащите готовые ролики с субтитрами в кадре",
-                      "Kadr прочитает субтитры и сравнит с ними распознавание. Или видео вместе с его .srt")
-        sv, self.table = text_area(NSMakeRect(20, 104, W - 40, 256))
-        self.table.setEditable_(False)
-        self.table.setFont_(NSFont.monospacedSystemFontOfSize_weight_(12, 0))
-        self.status = label("", NSMakeRect(20, 76, W - 40, 18), size=12, color=NSColor.secondaryLabelColor())
-        buttons = [("Проверить все", "checkAll:", 130), ("Расхождения → в замены", "toFixes:", 200),
-                   ("База знаний", "showKnowledge:", 120), ("Папка эталонов", "openRefs:", 130)]
+        drop.texts = ("Перетащите готовый ролик — станет эталоном",
+                      "Субтитры прочитаются с кадра. Или видео вместе с его .srt")
+        # что влияет: подпись слева, состояние справа — значения в show()
+        self.fixes_l, self.dict_l, on = (label(t, NSMakeRect(300, y, W - 320, 18), color=gray)
+                                         for t, y in (("", 446), ("", 424), ("всегда включены", 402)))
+        for x in (self.fixes_l, self.dict_l, on):
+            x.setAlignment_(2)   # вправо
+        kb = NSButton.buttonWithTitle_target_action_("Словарь и замены…", self, "showKnowledge:")
+        kb.setFrame_(NSMakeRect(W - 186, 368, 172, 30))
+        # замер: три числа и таблица
+        self.wer_l, self.delta_l, self.refs_l = (label("", NSMakeRect(20 + i * 190, 300, 180, 28), size=22)
+                                                 for i in range(3))
+        cols = (("name", "Ролик", 130), ("wer", "Ошибок", 64), ("errs", "Чаще всего путает", 360))
+        self.tv = NSTableView.alloc().initWithFrame_(NSMakeRect(0, 0, W - 40, 170))
+        for ident, title, width in cols:
+            c = NSTableColumn.alloc().initWithIdentifier_(ident)
+            c.setTitle_(title)
+            c.setWidth_(width)
+            self.tv.addTableColumn_(c)
+        self.tv.setDataSource_(self)
+        self.tv.setUsesAlternatingRowBackgroundColors_(True)
+        sv = NSScrollView.alloc().initWithFrame_(NSMakeRect(20, 92, W - 40, 180))
+        sv.setHasVerticalScroller_(True)
+        sv.setBorderType_(2)
+        sv.setDocumentView_(self.tv)
+        self.status = label("", NSMakeRect(20, 66, W - 40, 18), size=12, color=gray)
         x = 14
-        for title, action, width in buttons:
+        for title, action, width in (("Проверить все", "checkAll:", 140), ("Ошибки → в замены", "toFixes:", 170),
+                                     ("Папка эталонов", "openRefs:", 140)):
             b = NSButton.buttonWithTitle_target_action_(title, self, action)
-            b.setFrame_(NSMakeRect(x, 24, width, 32))
+            b.setFrame_(NSMakeRect(x, 20, width, 32))
             v.addSubview_(b)
             x += width
-        for x in (drop, sv, self.status, label("Эталоны и ошибки распознавания:", NSMakeRect(20, 364, W - 40, 18),
-                                                size=12, bold=True)):
+        for x in (drop, label("Влияет на каждое новое видео", NSMakeRect(20, 472, W - 40, 18), bold=True),
+                  label("Замены после распознавания и перевода", NSMakeRect(20, 446, 290, 18)), self.fixes_l,
+                  label("Словарь — подсказка Whisper", NSMakeRect(20, 424, 290, 18)), self.dict_l,
+                  label("Фильтр выдуманных титров, второй проход", NSMakeRect(20, 402, 290, 18)), on, kb,
+                  label("Замер на эталонах", NSMakeRect(20, 346, 160, 18), bold=True),
+                  label("— только замер, на новые видео не влияет", NSMakeRect(160, 346, W - 180, 18),
+                        size=12, color=gray),
+                  *(label(t, NSMakeRect(20 + i * 190, 284, 180, 16), size=11, color=gray)
+                    for i, t in enumerate(("ошибок в словах", "с прошлой проверки", "эталонов"))),
+                  self.wer_l, self.delta_l, self.refs_l, sv, self.status):
             v.addSubview_(x)
         return self
 
     def show(self):
-        self.table.setString_(train.report())
+        f, gloss = config.fixes(), runner._read(config.GLOBAL_CONTEXT)
+        self.fixes_l.setStringValue_(f"{len(f)} · " + ", ".join(sorted(set(f.values()))[:2]) if f else "нет")
+        self.dict_l.setStringValue_(gloss[:32] + "…" if len(gloss) > 32 else gloss or "пусто")
+        s = train.summary()
+        self.wer_l.setStringValue_(f"{s['wer']}%" if s["wer"] is not None else "—")
+        d = s["delta"]
+        self.delta_l.setStringValue_("—" if d is None else f"{d:+}%")
+        self.delta_l.setTextColor_(NSColor.labelColor() if not d else NSColor.systemGreenColor() if d < 0
+                                   else NSColor.systemRedColor())
+        self.refs_l.setStringValue_(f"{s['refs']} · {s['minutes']} мин")
+        self.rows = train.rows()
+        self.tv.reloadData()
+
+    def numberOfRowsInTableView_(self, tv):
+        return len(self.rows)
+
+    def tableView_objectValueForTableColumn_row_(self, tv, col, row):
+        return self.rows[row][("name", "wer", "errs").index(col.identifier())]
 
     @objc.python_method
     def say(self, text):
@@ -910,7 +956,7 @@ class Training(NSObject):
         self.say(f"Распознаю {d.name}…")
         r = train.check(d)
         self.say(f"{d.name}: ошибок {r['wer']}%")
-        AppHelper.callAfter(self.table.setString_, train.report())
+        AppHelper.callAfter(self.show)
 
     @objc.python_method
     def work(self, fn):

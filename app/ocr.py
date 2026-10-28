@@ -44,6 +44,26 @@ def read(img: Path, req) -> list[str]:
     return [t for _, t in sorted(lines)]
 
 
+def caps(s: str) -> bool:
+    """Строка капсом — экран кофемашины, этикетка, заголовок («ПРОМЫТЬ ВЗБИВАТЕЛЬ», «КОФЕ В ДРИП-ПАКЕТАХ»).
+    Бывает и сказанный титр, но по кадру не отличить; эталон частичный — выкинутая строка лишь сужает замер,
+    а оставленная надпись записывает Whisper «пропуски» слов, которых никто не говорил."""
+    letters = re.findall(r"[^\W\d_]", s)
+    return len(letters) >= 4 and sum(c.isupper() for c in letters) / len(letters) >= 0.7
+
+
+def phrases(cues: list[Cue], gap: float = 0.5, most: float = 6.0) -> list[Cue]:
+    """Титры по 2–3 слова → фразы: монтажёр режет речь под экран, а эталон читают и сравнивают фразами."""
+    out: list[Cue] = []
+    for c in cues:
+        p = out[-1] if out else None
+        if p and c.start - p.end <= gap and c.end - p.start <= most and not re.search(r"[.!?…]$", p.text):
+            p.end, p.text = c.end, f"{p.text} {c.text}"
+        else:
+            out.append(Cue(len(out) + 1, c.start, c.end, c.text))
+    return out
+
+
 def same(a: str, b: str) -> bool:
     a, b = a.lower(), b.lower()
     return a == b or difflib.SequenceMatcher(None, a, b).ratio() >= 0.8 or b.startswith(a)   # слова дописываются
@@ -71,8 +91,13 @@ def steady(frames: list[list[str]]) -> set[str]:
 
     low = [[s.lower() for s in lines] for lines in frames]
     hold = max(3.0, min(MAX_HOLD, 0.15 * len(frames) / FPS))
-    return {u for u in {s for lines in low for s in lines}
-            if sum(any(near(u, s) for s in lines) for lines in low) / FPS > hold}
+    out = set()
+    for u in {s for lines in low for s in lines}:
+        seen = [any(near(u, s) for s in lines) for lines in low]
+        # или мигает: графика «подходит / не подходит» вспыхивает десяток раз, а речь дословно так не повторяют
+        if sum(seen) / FPS > hold or sum(x and not y for x, y in zip(seen, [False] + seen)) >= 4:
+            out.add(u)
+    return out
 
 
 def to_cues(frames: list[list[str]]) -> list[Cue]:
@@ -80,7 +105,7 @@ def to_cues(frames: list[list[str]]) -> list[Cue]:
     Строка, которая за ролик набирает больше MAX_HOLD секунд, — надпись на пачке или вывеска, даже если
     рядом с ней меняются титры: её выкидываем до склейки."""
     labels = steady(frames)
-    texts = [" ".join(s for s in lines if s.lower() not in labels) for lines in frames]
+    texts = [" ".join(s for s in lines if s.lower() not in labels and not caps(s)) for lines in frames]
     runs: list[list] = []   # [первый кадр, последний кадр, варианты]
     for k, t in enumerate(texts):
         if not t:
@@ -101,7 +126,7 @@ def to_cues(frames: list[list[str]]) -> list[Cue]:
         text = re.sub(r"\s+", " ", re.sub(r"\*[^*]*\*|\[[^]]*\]", "", text)).strip()   # *непонятные звуки* не произносят
         if text:
             cues.append(Cue(len(cues) + 1, a / FPS, (b + 1) / FPS, text))
-    return cues
+    return phrases(cues)
 
 
 def main():
