@@ -86,7 +86,8 @@ def handle(src: Path):
     except Exception as e:
         log.exception("[%s] ❌ Ошибка", src.name)
         shutil.rmtree(out, ignore_errors=True)
-        fail = config.FAILED / f"project-{n}"
+        # номер видео из «Базы знаний» — по её счётчику, в «Ошибках» такой уже может быть
+        fail = config.FAILED / f"project-{next_project() if learn else n}"
         fail.mkdir(parents=True)
         for f in (src, ctx_file) if take else ():
             if f.exists():
