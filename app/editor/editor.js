@@ -710,6 +710,7 @@ $('rebuild').onclick = async () => {
   await call('rebuild', { proj })
 }
 window.onRebuild = (state, text) => {
+  if (state === 'burn') return status(`Прожигаю субтитры в видео… ${text}`)
   if (state === 'soft') {
     // превью обычно играет этот же файл, а байты в нём уже другие — перечитать с того же места
     if (init.video) {
@@ -717,7 +718,7 @@ window.onRebuild = (state, text) => {
       v.addEventListener('loadedmetadata', () => { v.currentTime = t }, { once: true })
       v.src = 'kadr://video/clip'
     }
-    return status(`Дорожки субтитров обновлены: ${text}. Прожигаю…`)
+    return status(`Дорожки субтитров обновлены: ${text}`)
   }
   $('rebuild').disabled = false
   status(state === 'done' ? `Готово: ${text}` : `Ошибка: ${text}`)

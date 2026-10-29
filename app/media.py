@@ -11,13 +11,21 @@ from . import config
 log = logging.getLogger(__name__)
 
 
-async def _run(*args: str) -> str:
+async def _run(*args: str, on_line=None) -> str:
     # QoS потока дочерний процесс не наследует — в «Экономе» зажимаем ffmpeg явно
     clamp = ["/usr/sbin/taskpolicy", "-c", "utility"] if config.EFFORTS[config.EFFORT]["bg"] else []
     proc = await asyncio.create_subprocess_exec(
         *clamp, *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
-    out, err = await proc.communicate()
+    if on_line:
+        async def lines():
+            async for line in proc.stdout:
+                on_line(line.decode(errors="replace").strip())
+        # stderr читаем одновременно: иначе ffmpeg забьёт его буфер и встанет
+        out, (_, err) = b"", await asyncio.gather(lines(), proc.stderr.read())
+        await proc.wait()
+    else:
+        out, err = await proc.communicate()
     if proc.returncode != 0:
         tail = err.decode(errors="replace")[-1500:]
         raise RuntimeError(f"{args[0]} завершился с ошибкой:\n{tail}")
@@ -105,7 +113,8 @@ async def has_encoder(name: str) -> bool:
     return any(line.split()[1:2] == [name] for line in out.splitlines())
 
 
-async def burn_subs(video: Path, ass: Path, dst: Path, keep: list[list[float]] | None = None) -> Path:
+async def burn_subs(video: Path, ass: Path, dst: Path, keep: list[list[float]] | None = None,
+                    on_progress=None) -> Path:
     """MP4 с субтитрами, вшитыми в картинку. На Mac кодирует аппаратно через VideoToolbox.
     ASS собран из пресета (app/style.py), шрифты — свои из fontsdir: тот же рендер, что в превью редактора.
     keep — отрезки исходника, которые остаются (монтаж по тексту): склеиваются в один ролик, ASS уже в его времени."""
@@ -131,12 +140,18 @@ async def burn_subs(video: Path, ass: Path, dst: Path, keep: list[list[float]] |
         maps = ["-map", "0:v:0", "-map", "0:a:0?", "-vf", vf]
     x264 = ["-c:v", "libx264", "-preset", config.BURN_PRESET, "-crf", config.BURN_CRF]
     vt = ["-c:v", "h264_videotoolbox", "-q:v", "65"]
+    prog, on_line = [], None
+    if on_progress:
+        total = sum(b - a for a, b in keep) if keep else float((await probe(video))["format"].get("duration") or 0)
+        prog = ["-progress", "pipe:1", "-nostats"]
+        on_line = lambda l: total and l.startswith("out_time_us=") and l[12:].isdigit() and \
+            on_progress(min(1.0, int(l[12:]) / 1e6 / total))
     for codec in ([vt, x264] if await has_encoder("h264_videotoolbox") else [x264]):
         try:
             await _run(
                 config.ffmpeg(), "-y", "-i", str(video), *maps, *codec,
                 "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k",
-                "-movflags", "+faststart", str(dst),
+                "-movflags", "+faststart", *prog, str(dst), on_line=on_line,
             )
             return dst
         except RuntimeError:
