@@ -90,6 +90,9 @@ def human_error(e: Exception) -> str:
         return "На балансе Anthropic закончились деньги: console.anthropic.com → Billing"
     if "anthropic-workspace-id" in msg:
         return "Ключ без workspace — укажите Workspace ID в меню"
+    if isinstance(e, anthropic.PermissionDeniedError):
+        # 403 «Request not allowed» — Anthropic не обслуживает страну, из которой пришёл запрос (по IP)
+        return "Anthropic недоступен из этой страны — включите VPN или выберите локальный переводчик"
     if isinstance(e, anthropic.APIConnectionError):
         return "Нет связи с Anthropic — проверьте интернет и закиньте файл ещё раз"
     return msg[:150]
